@@ -1,0 +1,13 @@
+[package]
+name = "axin_apc_simulator"
+version = "0.1.0"
+edition = "2021"
+repository = "https://github.com/hmedina/XPS"
+license = "MIT"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+petgraph = "0.6.0"
+rand = "0.8.4"
+nalgebra = "0.29.0"
