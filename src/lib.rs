@@ -656,29 +656,69 @@ pub mod reaction_mixture {
 
         }
 
-        //pub fn axn_axn_unary_unbind(&mut self, head_node: NodeIndex, tail_node: NodeIndex) {
-        //    let mut target_species: RefMut<MixtureSpecies> = self.species_annots.get(&head_node).unwrap().borrow_mut();
-        //    let target_edge_index = self.universe_graph.find_edge(head_node, tail_node).unwrap();
-        //    let target_edge = 
-        //    // remove edge & update caches
-        //    self.universe_graph.remove_edge(target_edge_index).unwrap();
-        //    let node_a: &mut AgentType = self.universe_graph.node_weight_mut(head_node).unwrap();
-        //    match node_a {
-        //        AgentType::AxnNode(x1, _, _) => match x1 {
-        //            Some(_) => *x1 = None,
-        //            None => panic!("This Axn head was not already bound!")
-        //        }
-        //        AgentType::ApcNode(_, _, _, _) => panic!("This matched an APC node instead of a bond-headed Axin node!")
-        //    }
-        //    let node_b = self.universe_graph.node_weight_mut(tail_node).unwrap();
-        //    match node_b {
-        //        AgentType::AxnNode(_, x2, _) => match x2 {
-        //            Some(_) => *x2 = None,
-        //            None => panic!("This Axn tail was not already bound!")
-        //        }
-        //        AgentType::ApcNode(_, _, _, _) => panic!("This matched an APC node instead of a bond-tailed Axin node!")
-        //    }
-        //    target_species.edges.xh_xt.remove(&target_edge);
-        //}
+        pub fn axn_axn_unary_unbind(&mut self, target_edge: Rc<RefCell<EdgeEnds>>) {
+            let EdgeEnds{a: head_node, b: tail_node, a_s: head_type, b_s: tail_type, z: edge_index} = *target_edge.borrow();
+            match head_type {
+                'h' => (),
+                _ => panic!("Did not find an Axn head-type annotation!")
+            }
+            match tail_type {
+                't' => (),
+                _ => panic!("Did not find an Axn tail-type annotation!")
+            }
+            let mut target_species: RefMut<MixtureSpecies> = self.species_annots.get(&head_node).unwrap().borrow_mut();
+            // remove edge & update caches
+            self.universe_graph.remove_edge(edge_index).unwrap();
+            let node_a: &mut AgentType = self.universe_graph.node_weight_mut(head_node).unwrap();
+            match node_a {
+                AgentType::AxnNode(x1, _, _) => match x1 {
+                    Some(_) => *x1 = None,
+                    None => panic!("This Axn head was not already bound!")
+                }
+                AgentType::ApcNode(_, _, _, _) => panic!("This matched an APC node instead of a bond-headed Axin node!")
+            }
+            let node_b = self.universe_graph.node_weight_mut(tail_node).unwrap();
+            match node_b {
+                AgentType::AxnNode(_, x2, _) => match x2 {
+                    Some(_) => *x2 = None,
+                    None => panic!("This Axn tail was not already bound!")
+                }
+                AgentType::ApcNode(_, _, _, _) => panic!("This matched an APC node instead of a bond-tailed Axin node!")
+            }
+            target_species.edges.xh_xt.remove(&target_edge);
+            self.edges.xh_xt.remove(&target_edge);
+            self.ports.xh_free.insert(head_node);
+            self.ports.xt_free.insert(tail_node);
+            target_species.ports.xh_free.insert(head_node);
+            target_species.ports.xt_free.insert(tail_node);
+            // helper closure for bond resilience updates
+            let mut resilience_iterate_typed = |edge_iter: &BTreeSet<std::rc::Rc<std::cell::RefCell<EdgeEnds>>>| {
+                for boxed_edge in edge_iter {
+                    let edge = boxed_edge.borrow();
+                    let edge_id = self.universe_graph.find_edge(edge.a, edge.b).unwrap();
+                    // check bond's weight, which is a boolean, marking if the bond is a known cycle-member
+                    if ! self.universe_graph.edge_weight(edge_id).unwrap() {
+                        let mut counterfactual_graph = self.universe_graph.clone();
+                        counterfactual_graph.remove_edge(edge_id);
+                        let path = astar(&counterfactual_graph, edge.a, |finish| finish == edge.b, |_| 1, |_| 0);
+                        match path {
+                            Some(_) => {self.universe_graph.update_edge(edge.a, edge.b, true);},
+                            None => ()
+                        }
+                    }
+                }
+            };
+            // update resilience of that species' edges
+            resilience_iterate_typed(&target_species.edges.xh_xt);
+            resilience_iterate_typed(&target_species.edges.p1_xp);
+            resilience_iterate_typed(&target_species.edges.p2_xp);
+            resilience_iterate_typed(&target_species.edges.p3_xp);
+            resilience_iterate_typed(&target_species.edges.pp_pp);
+            // update rule activities
+            self.rule_activities.axn_axn_u_bind.mass += 1;
+            self.rule_activities.axn_axn_u_free.mass -= 1;
+            // update unary binding pair: one bond removed
+            self.unary_binding_pairs.xh_xt[(head_node.index(), tail_node.index())] = true;
+        }
     }
 }

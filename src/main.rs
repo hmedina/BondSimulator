@@ -1,5 +1,8 @@
 use axin_apc_simulator::{rule_activities::RuleRates, reaction_mixture::Mixture};
 use petgraph::prelude::*;
+use std::rc::Rc;
+use std::cell::RefCell;
+use axin_apc_simulator::edge_ends::EdgeEnds;
 
 
 fn main() {
@@ -31,5 +34,11 @@ fn main() {
     my_mix.axn_axn_binary_bind(NodeIndex::from(1), NodeIndex::from(2));
     println!("{}", my_mix.to_kappa());
     my_mix.axn_axn_unary_bind(NodeIndex::from(2), NodeIndex::from(0));
+    println!("{}", my_mix.to_kappa());
+    my_mix.axn_axn_unary_unbind(Rc::new(RefCell::new(EdgeEnds{a: NodeIndex::new(0),
+                                                              b: NodeIndex::new(1), 
+                                                              a_s: 'h', 
+                                                              b_s: 't', 
+                                                              z: EdgeIndex::new(0)})));
     println!("{}", my_mix.to_kappa());
 }
