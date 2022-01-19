@@ -82,7 +82,7 @@ pub mod edge_ends {
 }
 
 pub mod open_ports {
-    use std::collections::HashSet;
+    use std::collections::{HashSet, BTreeSet};
     use petgraph::prelude::NodeIndex;
 
     #[derive(Debug)]
@@ -103,22 +103,86 @@ pub mod open_ports {
                 self.xh_free.insert(*item);
             }
             for item in &other.xt_free {
-                self.xh_free.insert(*item);
+                self.xt_free.insert(*item);
             }
             for item in &other.xp_free {
-                self.xh_free.insert(*item);
+                self.xp_free.insert(*item);
             }
             for item in &other.p1_free {
-                self.xh_free.insert(*item);
+                self.p1_free.insert(*item);
             }
             for item in &other.p2_free {
-                self.xh_free.insert(*item);
+                self.p2_free.insert(*item);
             }
             for item in &other.p3_free {
-                self.xh_free.insert(*item);
+                self.p3_free.insert(*item);
             }
             for item in &other.pp_free {
-                self.xh_free.insert(*item);
+                self.pp_free.insert(*item);
+            }
+        }
+
+        // this would be simplified by "drain_filter" moving out of the Nightly-only
+        pub fn eject_where(&mut self, ejected_nodes: &BTreeSet<NodeIndex>) -> Self {
+            let mut xh_ejected: HashSet<NodeIndex> = HashSet::new();
+            let mut xt_ejected: HashSet<NodeIndex> = HashSet::new();
+            let mut xp_ejected: HashSet<NodeIndex> = HashSet::new();
+            let mut p1_ejected: HashSet<NodeIndex> = HashSet::new();
+            let mut p2_ejected: HashSet<NodeIndex> = HashSet::new();
+            let mut p3_ejected: HashSet<NodeIndex> = HashSet::new();
+            let mut pp_ejected: HashSet<NodeIndex> = HashSet::new();
+            let mut xh_kept: HashSet<NodeIndex> = HashSet::new();
+            let mut xt_kept: HashSet<NodeIndex> = HashSet::new();
+            let mut xp_kept: HashSet<NodeIndex> = HashSet::new();
+            let mut p1_kept: HashSet<NodeIndex> = HashSet::new();
+            let mut p2_kept: HashSet<NodeIndex> = HashSet::new();
+            let mut p3_kept: HashSet<NodeIndex> = HashSet::new();
+            let mut pp_kept: HashSet<NodeIndex> = HashSet::new();
+            for item in self.xh_free.drain() {
+                if ejected_nodes.contains(&item) {assert!(xh_ejected.insert(item))}
+                else {assert!(xh_kept.insert(item))}
+            }
+            for item in self.xt_free.drain() {
+                if ejected_nodes.contains(&item) {assert!(xt_ejected.insert(item))}
+                else {assert!(xt_kept.insert(item))}
+            }
+            for item in self.xp_free.drain() {
+                if ejected_nodes.contains(&item) {assert!(xp_ejected.insert(item))}
+                else {assert!(xp_kept.insert(item))}
+            }
+            for item in self.p1_free.drain() {
+                if ejected_nodes.contains(&item) {assert!(p1_ejected.insert(item))}
+                else {assert!(p1_kept.insert(item))}
+            }
+            for item in self.p2_free.drain() {
+                if ejected_nodes.contains(&item) {assert!(p2_ejected.insert(item))}
+                else {assert!(p2_kept.insert(item))}
+            }
+            for item in self.p3_free.drain() {
+                if ejected_nodes.contains(&item) {assert!(p3_ejected.insert(item))}
+                else {assert!(p3_kept.insert(item))}
+            }
+            for item in self.pp_free.drain() {
+                if ejected_nodes.contains(&item) {assert!(pp_ejected.insert(item))}
+                else {assert!(pp_kept.insert(item))}
+            }
+            // update self
+            self.xh_free = xh_kept;
+            self.xt_free = xt_kept;
+            self.xp_free = xp_kept;
+            self.p1_free = p1_kept;
+            self.p2_free = p2_kept;
+            self.p3_free = p3_kept;
+            self.pp_free = pp_kept;
+            // return new
+            OpenPorts {
+                xh_free: xh_ejected,
+                xt_free: xt_ejected,
+                xp_free: xp_ejected,
+                p1_free: p1_ejected,
+                p2_free: p2_ejected,
+                p3_free: p3_ejected,
+                pp_free: pp_ejected
             }
         }
 
@@ -168,6 +232,7 @@ pub mod edge_types {
     use std::collections::BTreeSet;
     use std::rc::Rc;
     use std::cell::RefCell;
+    use petgraph::prelude::*;
     use crate::edge_ends::EdgeEnds;
 
     #[derive(Debug)]
@@ -196,6 +261,59 @@ pub mod edge_types {
             }
             for item in &other.pp_pp {
                 self.xh_xt.insert(Rc::clone(&item));
+            }
+        }
+
+        // this would be simplified by "drain_filter" moving out of the Nightly-only
+        pub fn eject_where(&mut self, ejected_nodes: &BTreeSet<NodeIndex>) -> Self {
+            let mut xh_xt_ejected: BTreeSet<Rc<RefCell<EdgeEnds>>> = BTreeSet::new();
+            let mut p1_xp_ejected: BTreeSet<Rc<RefCell<EdgeEnds>>> = BTreeSet::new();
+            let mut p2_xp_ejected: BTreeSet<Rc<RefCell<EdgeEnds>>> = BTreeSet::new();
+            let mut p3_xp_ejected: BTreeSet<Rc<RefCell<EdgeEnds>>> = BTreeSet::new();
+            let mut pp_pp_ejected: BTreeSet<Rc<RefCell<EdgeEnds>>> = BTreeSet::new();
+            let mut xh_xt_kept: BTreeSet<Rc<RefCell<EdgeEnds>>> = BTreeSet::new();
+            let mut p1_xp_kept: BTreeSet<Rc<RefCell<EdgeEnds>>> = BTreeSet::new();
+            let mut p2_xp_kept: BTreeSet<Rc<RefCell<EdgeEnds>>> = BTreeSet::new();
+            let mut p3_xp_kept: BTreeSet<Rc<RefCell<EdgeEnds>>> = BTreeSet::new();
+            let mut pp_pp_kept: BTreeSet<Rc<RefCell<EdgeEnds>>> = BTreeSet::new();
+            for item in &self.xh_xt {
+                if ejected_nodes.contains(&item.borrow().a) && ejected_nodes.contains(&item.borrow().b) {assert!(xh_xt_ejected.insert(Rc::clone(item)))}
+                else if !ejected_nodes.contains(&item.borrow().a) && !ejected_nodes.contains(&item.borrow().b) {assert!(xh_xt_kept.insert(Rc::clone(item)))}
+                else {panic!{"This binary break would sever more than one bond!"}}
+            }
+            for item in &self.p1_xp {
+                if ejected_nodes.contains(&item.borrow().a) && ejected_nodes.contains(&item.borrow().b) {assert!(p1_xp_ejected.insert(Rc::clone(item)))}
+                else if !ejected_nodes.contains(&item.borrow().a) && !ejected_nodes.contains(&item.borrow().b) {assert!(p1_xp_kept.insert(Rc::clone(item)))}
+                else {panic!{"This binary break would sever more than one bond!"}}
+            }
+            for item in &self.p2_xp {
+                if ejected_nodes.contains(&item.borrow().a) && ejected_nodes.contains(&item.borrow().b) {assert!(p2_xp_ejected.insert(Rc::clone(item)))}
+                else if !ejected_nodes.contains(&item.borrow().a) && !ejected_nodes.contains(&item.borrow().b) {assert!(p2_xp_kept.insert(Rc::clone(item)))}
+                else {panic!{"This binary break would sever more than one bond!"}}
+            }
+            for item in &self.p3_xp {
+                if ejected_nodes.contains(&item.borrow().a) && ejected_nodes.contains(&item.borrow().b) {assert!(p3_xp_ejected.insert(Rc::clone(item)))}
+                else if !ejected_nodes.contains(&item.borrow().a) && !ejected_nodes.contains(&item.borrow().b) {assert!(p3_xp_kept.insert(Rc::clone(item)))}
+                else {panic!{"This binary break would sever more than one bond!"}}
+            }
+            for item in &self.pp_pp {
+                if ejected_nodes.contains(&item.borrow().a) && ejected_nodes.contains(&item.borrow().b) {assert!(pp_pp_ejected.insert(Rc::clone(item)))}
+                else if !ejected_nodes.contains(&item.borrow().a) && !ejected_nodes.contains(&item.borrow().b) {assert!(pp_pp_kept.insert(Rc::clone(item)))}
+                else {panic!{"This binary break would sever more than one bond!"}}
+            }
+            // update self
+            self.xh_xt = xh_xt_kept;
+            self.p1_xp = p1_xp_kept;
+            self.p2_xp = p2_xp_kept;
+            self.p3_xp = p3_xp_kept;
+            self.pp_pp = pp_pp_kept;
+            // return new
+            EdgeTypes {
+                xh_xt: xh_xt_ejected,
+                p1_xp: p1_xp_ejected,
+                p2_xp: p2_xp_ejected,
+                p3_xp: p3_xp_ejected,
+                pp_pp: pp_pp_ejected
             }
         }
 
@@ -296,7 +414,7 @@ pub mod reaction_mixture {
     use crate::agent_types::{AgentType, AxnNode, ApcNode};
     use crate::rule_activities::{RuleActivities, RuleRates, MassActionTerm};
     use crate::unary_embeds::UnaryEmbeds;
-    use petgraph::{graph::Graph, algo::astar::astar, prelude::*};
+    use petgraph::{graph::Graph, algo::astar::astar, prelude::*, visit::Dfs};
     use rand::prelude::*;
     use std::cell::{RefCell, RefMut};
     use std::cmp::Ordering;
@@ -702,8 +820,8 @@ pub mod reaction_mixture {
                         counterfactual_graph.remove_edge(edge_id);
                         let path = astar(&counterfactual_graph, edge.a, |finish| finish == edge.b, |_| 1, |_| 0);
                         match path {
-                            Some(_) => {self.universe_graph.update_edge(edge.a, edge.b, true);},
-                            None => ()
+                            Some(_) => (),
+                            None => {self.universe_graph.update_edge(edge.a, edge.b, false);}
                         }
                     }
                 }
@@ -719,6 +837,68 @@ pub mod reaction_mixture {
             self.rule_activities.axn_axn_u_free.mass -= 1;
             // update unary binding pair: one bond removed
             self.unary_binding_pairs.xh_xt[(head_node.index(), tail_node.index())] = true;
+        }
+
+        pub fn axn_axn_binary_unbind(&mut self, target_edge: Rc<RefCell<EdgeEnds>>) {
+            let EdgeEnds{a: head_node, b: tail_node, a_s: head_type, b_s: tail_type, z: edge_index} = *target_edge.borrow();
+            match head_type {
+                'h' => (),
+                _ => panic!("Did not find an Axn head-type annotation!")
+            }
+            match tail_type {
+                't' => (),
+                _ => panic!("Did not find an Axn tail-type annotation!")
+            }
+            // partition the graph, discover what node indexes ended where
+            self.universe_graph.remove_edge(edge_index).unwrap(); //unwrap for sanity-check: the edge did exist
+            let mut dfs_head = Dfs::new(&self.universe_graph, head_node);
+            let mut dfs_tail = Dfs::new(&self.universe_graph, tail_node);
+            let mut head_graph_indexes: BTreeSet<NodeIndex> = BTreeSet::new();
+            let mut tail_graph_indexes: BTreeSet<NodeIndex> = BTreeSet::new();
+            let mut nx_head = dfs_head.next(&self.universe_graph);
+            let mut nx_tail = dfs_tail.next(&self.universe_graph);
+            loop {
+                match (nx_head, nx_tail) {
+                    (Some(in_head_found), Some(in_tail_found)) => {
+                        head_graph_indexes.insert(in_head_found);
+                        tail_graph_indexes.insert(in_tail_found);
+                        nx_head = dfs_head.next(&self.universe_graph);
+                        nx_tail = dfs_tail.next(&self.universe_graph);
+                    },
+                    (None, Some(in_tail_found)) => {
+                        tail_graph_indexes.insert(in_tail_found);
+                        head_graph_indexes = self.species_annots.get(&head_node).unwrap().borrow().agent_set.difference(&tail_graph_indexes).cloned().collect();
+                        break
+                    },
+                    (Some(in_head_found), None) => {
+                        head_graph_indexes.insert(in_head_found);
+                        tail_graph_indexes = self.species_annots.get(&tail_node).unwrap().borrow().agent_set.difference(&head_graph_indexes).cloned().collect();
+                        break
+                    },
+                    (None, None) => break
+                }
+            }
+            let ejected_indexes = 
+                if head_graph_indexes.len() <= tail_graph_indexes.len()     // ToDo should this be reversed? Iterate over small & lookup over big instead?
+                    {head_graph_indexes}
+                else 
+                    {tail_graph_indexes};
+            let mut original_species = self.species_annots.get(&tail_node).unwrap().borrow_mut();
+            // create new species cache, in-place modify old species cache
+            let ejected_ports: OpenPorts = original_species.ports.eject_where(&ejected_indexes);
+            let ejected_edges: EdgeTypes = original_species.edges.eject_where(&ejected_indexes);
+            let new_species = Rc::new(RefCell::new(MixtureSpecies{
+                ports: ejected_ports,
+                edges: ejected_edges,
+                size: ejected_indexes.len(),
+                agent_set: ejected_indexes
+            }));
+            // update self.species_annots
+            // update self.species_set
+            // update self.ports
+            // update self.edges
+            // update self.unary_binding_pairs
+            // update self.rule_activities
         }
     }
 }
