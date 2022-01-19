@@ -41,4 +41,10 @@ fn main() {
                                                               b_s: 't', 
                                                               z: EdgeIndex::new(0)})));
     println!("{}", my_mix.to_kappa());
+    my_mix.axn_axn_binary_unbind(Rc::new(RefCell::new(EdgeEnds{a: NodeIndex::new(1),
+                                                               b: NodeIndex::new(2),
+                                                               a_s: 'h',
+                                                               b_s: 't',
+                                                               z: EdgeIndex::new(1)})));
+    println!("{}", my_mix.to_kappa());
 }

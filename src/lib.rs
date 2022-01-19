@@ -677,6 +677,9 @@ pub mod reaction_mixture {
             // define which will be the "host" species, receiving the cache data from "eaten" species
             let (host_index, eaten_index) = if self.species_annots.get(&head_node).unwrap().borrow().size >= self.species_annots.get(&tail_node).unwrap().borrow().size {(head_node, tail_node)} else {(tail_node, head_node)};
             // update rule activities
+            //  for the Axn-Axn case, we can ignore the _free'ing activities
+            //  for the other bond types, as we are not modifying those bond
+            //  counts, ergo their unbinding counts
             self.rule_activities.axn_axn_b_free.mass += 1;  //the new bond
             //self.rule_activities.axn_axn_u_free.mass      // bi -> uni binding does not change the number of cycles in the system
             self.rule_activities.axn_axn_b_bind.mass -= (self.species_annots.get(&host_index).unwrap().borrow().ports.xh_free.len() * self.species_annots.get(&eaten_index).unwrap().borrow().ports.xt_free.len()) + (self.species_annots.get(&eaten_index).unwrap().borrow().ports.xh_free.len() * self.species_annots.get(&host_index).unwrap().borrow().ports.xt_free.len());    // potential bindings that were binary, are now unary
@@ -766,8 +769,8 @@ pub mod reaction_mixture {
                     self.unary_binding_pairs.xh_xt[(p1_port.index(), p2_port.index())] = true;
                 }
             }
-            for p1_port in &self.species_annots.get(&host_index).unwrap().borrow().ports.pp_free{
-                for p2_port in &self.species_annots.get(&eaten_index).unwrap().borrow().ports.pp_free {
+            for p1_port in &self.species_annots.get(&eaten_index).unwrap().borrow().ports.pp_free{
+                for p2_port in &self.species_annots.get(&host_index).unwrap().borrow().ports.pp_free {
                     self.unary_binding_pairs.xh_xt[(p1_port.index(), p2_port.index())] = true;
                 }
             }
@@ -878,27 +881,91 @@ pub mod reaction_mixture {
                     (None, None) => break
                 }
             }
-            let ejected_indexes = 
-                if head_graph_indexes.len() <= tail_graph_indexes.len()     // ToDo should this be reversed? Iterate over small & lookup over big instead?
-                    {head_graph_indexes}
+            let (ejected_mark, ejected_indexes, retained_mark, retained_indexes) =  // ToDo should this be reversed? Iterate over small & lookup over big instead?
+                if head_graph_indexes.len() <= tail_graph_indexes.len()
+                    {(head_node, head_graph_indexes, tail_node, tail_graph_indexes)}
                 else 
-                    {tail_graph_indexes};
-            let mut original_species = self.species_annots.get(&tail_node).unwrap().borrow_mut();
+                    {(tail_node, tail_graph_indexes, head_node, head_graph_indexes)};
             // create new species cache, in-place modify old species cache
-            let ejected_ports: OpenPorts = original_species.ports.eject_where(&ejected_indexes);
-            let ejected_edges: EdgeTypes = original_species.edges.eject_where(&ejected_indexes);
+            assert!(self.species_annots.get(&retained_mark).unwrap().borrow_mut().edges.xh_xt.remove(&target_edge), "Failed to remove edge inside species tracker!");
+            let ejected_ports: OpenPorts = self.species_annots.get(&retained_mark).unwrap().borrow_mut().ports.eject_where(&ejected_indexes);
+            let ejected_edges: EdgeTypes = self.species_annots.get(&retained_mark).unwrap().borrow_mut().edges.eject_where(&ejected_indexes);
+            self.species_annots.get(&retained_mark).unwrap().borrow_mut().size -= &ejected_indexes.len();
+            self.species_annots.get(&retained_mark).unwrap().borrow_mut().agent_set = retained_indexes;
             let new_species = Rc::new(RefCell::new(MixtureSpecies{
                 ports: ejected_ports,
                 edges: ejected_edges,
                 size: ejected_indexes.len(),
-                agent_set: ejected_indexes
+                agent_set: ejected_indexes.clone()
             }));
-            // update self.species_annots
-            // update self.species_set
-            // update self.ports
-            // update self.edges
-            // update self.unary_binding_pairs
+            // update the species annotation tracker
+            for node_index in &ejected_indexes {
+                self.species_annots.entry(*node_index).and_modify(|e| {*e = Rc::clone(&new_species)});
+            }
+            // update the species set, open port trackers, global edge tracker
+            self.species_set.push_back(Rc::clone(&new_species));
+            assert!(self.ports.xh_free.insert(head_node), "This Axn head was already listed as free prior to this unbinding!");
+            assert!(self.ports.xt_free.insert(tail_node), "This Axn tail was already listed as free prior to this unbinding!");
+            self.edges.xh_xt.remove(&target_edge);
+            // update unary trackers
+            for xh_port in &self.species_annots.get(&retained_mark).unwrap().borrow().ports.xh_free {
+                for xt_port in &self.species_annots.get(&ejected_mark).unwrap().borrow().ports.xt_free {
+                    self.unary_binding_pairs.xh_xt[(xh_port.index(), xt_port.index())] = false;
+                }
+            }
+            for xt_port in &self.species_annots.get(&retained_mark).unwrap().borrow().ports.xt_free {
+                for xh_port in &self.species_annots.get(&ejected_mark).unwrap().borrow().ports.xh_free {
+                    self.unary_binding_pairs.xh_xt[(xh_port.index(), xt_port.index())] = false;
+                }
+            }
+            for xp_port in &self.species_annots.get(&retained_mark).unwrap().borrow().ports.xp_free {
+                for p1_port in &self.species_annots.get(&ejected_mark).unwrap().borrow().ports.p1_free{
+                    self.unary_binding_pairs.p1_xp[(p1_port.index(), xp_port.index())] = false;
+                }
+                for p2_port in &self.species_annots.get(&ejected_mark).unwrap().borrow().ports.p2_free{
+                    self.unary_binding_pairs.p2_xp[(p2_port.index(), xp_port.index())] = false;
+                }
+                for p3_port in &self.species_annots.get(&ejected_mark).unwrap().borrow().ports.p3_free{
+                    self.unary_binding_pairs.p3_xp[(p3_port.index(), xp_port.index())] = false;
+                }
+            }
+            for xp_port in &self.species_annots.get(&ejected_mark).unwrap().borrow().ports.xp_free {
+                for p1_port in &self.species_annots.get(&retained_mark).unwrap().borrow().ports.p1_free{
+                    self.unary_binding_pairs.p1_xp[(p1_port.index(), xp_port.index())] = false;
+                }
+                for p2_port in &self.species_annots.get(&retained_mark).unwrap().borrow().ports.p2_free{
+                    self.unary_binding_pairs.p2_xp[(p2_port.index(), xp_port.index())] = false;
+                }
+                for p3_port in &self.species_annots.get(&retained_mark).unwrap().borrow().ports.p3_free{
+                    self.unary_binding_pairs.p3_xp[(p3_port.index(), xp_port.index())] = false;
+                }
+            }
+            for p1_port in &self.species_annots.get(&ejected_mark).unwrap().borrow().ports.pp_free{
+                for p2_port in &self.species_annots.get(&retained_mark).unwrap().borrow().ports.pp_free {
+                    self.unary_binding_pairs.xh_xt[(p1_port.index(), p2_port.index())] = false;
+                }
+            }
+            for p1_port in &self.species_annots.get(&retained_mark).unwrap().borrow().ports.pp_free{
+                for p2_port in &self.species_annots.get(&ejected_mark).unwrap().borrow().ports.pp_free {
+                    self.unary_binding_pairs.xh_xt[(p1_port.index(), p2_port.index())] = false;
+                }
+            }
             // update self.rule_activities
+            //  for the Axn-Axn case, we can ignore the _free'ing activities
+            //  for the other bond types, as we are not modifying those bond
+            //  counts, ergo their unbinding counts
+            self.rule_activities.axn_axn_b_free.mass -= 1;  // the bond we just broke
+            //self.rule_activities.axn_axn_u_free.mass      // bi -> uni unbinding does not change the number of cycles in the system
+            self.rule_activities.axn_axn_b_bind.mass += (self.species_annots.get(&retained_mark).unwrap().borrow().ports.xh_free.len() * self.species_annots.get(&ejected_mark).unwrap().borrow().ports.xt_free.len()) + (self.species_annots.get(&ejected_mark).unwrap().borrow().ports.xh_free.len() * self.species_annots.get(&retained_mark).unwrap().borrow().ports.xt_free.len());    // potential bindings that were unary, are now binary
+            self.rule_activities.axn_axn_u_bind.mass -= (self.species_annots.get(&retained_mark).unwrap().borrow().ports.xh_free.len() * self.species_annots.get(&ejected_mark).unwrap().borrow().ports.xt_free.len()) + (self.species_annots.get(&ejected_mark).unwrap().borrow().ports.xh_free.len() * self.species_annots.get(&retained_mark).unwrap().borrow().ports.xt_free.len());    // and so one counter increases by the other's loss
+            self.rule_activities.ap1_axn_b_bind.mass += (self.species_annots.get(&retained_mark).unwrap().borrow().ports.p1_free.len() * self.species_annots.get(&ejected_mark).unwrap().borrow().ports.xp_free.len()) + (self.species_annots.get(&ejected_mark).unwrap().borrow().ports.p1_free.len() * self.species_annots.get(&retained_mark).unwrap().borrow().ports.xp_free.len());
+            self.rule_activities.ap1_axn_u_bind.mass -= (self.species_annots.get(&retained_mark).unwrap().borrow().ports.p1_free.len() * self.species_annots.get(&ejected_mark).unwrap().borrow().ports.xp_free.len()) + (self.species_annots.get(&ejected_mark).unwrap().borrow().ports.p1_free.len() * self.species_annots.get(&retained_mark).unwrap().borrow().ports.xp_free.len());
+            self.rule_activities.ap2_axn_b_bind.mass += (self.species_annots.get(&retained_mark).unwrap().borrow().ports.p2_free.len() * self.species_annots.get(&ejected_mark).unwrap().borrow().ports.xp_free.len()) + (self.species_annots.get(&ejected_mark).unwrap().borrow().ports.p2_free.len() * self.species_annots.get(&retained_mark).unwrap().borrow().ports.xp_free.len());
+            self.rule_activities.ap2_axn_u_bind.mass -= (self.species_annots.get(&retained_mark).unwrap().borrow().ports.p2_free.len() * self.species_annots.get(&ejected_mark).unwrap().borrow().ports.xp_free.len()) + (self.species_annots.get(&ejected_mark).unwrap().borrow().ports.p2_free.len() * self.species_annots.get(&retained_mark).unwrap().borrow().ports.xp_free.len());
+            self.rule_activities.ap3_axn_b_bind.mass += (self.species_annots.get(&retained_mark).unwrap().borrow().ports.p3_free.len() * self.species_annots.get(&ejected_mark).unwrap().borrow().ports.xp_free.len()) + (self.species_annots.get(&ejected_mark).unwrap().borrow().ports.p3_free.len() * self.species_annots.get(&retained_mark).unwrap().borrow().ports.xp_free.len());
+            self.rule_activities.ap3_axn_u_bind.mass -= (self.species_annots.get(&retained_mark).unwrap().borrow().ports.p3_free.len() * self.species_annots.get(&ejected_mark).unwrap().borrow().ports.xp_free.len()) + (self.species_annots.get(&ejected_mark).unwrap().borrow().ports.p3_free.len() * self.species_annots.get(&retained_mark).unwrap().borrow().ports.xp_free.len());
+            self.rule_activities.apc_apc_b_bind.mass += (self.species_annots.get(&retained_mark).unwrap().borrow().ports.pp_free.len() * self.species_annots.get(&ejected_mark).unwrap().borrow().ports.pp_free.len()) + (self.species_annots.get(&ejected_mark).unwrap().borrow().ports.pp_free.len() * self.species_annots.get(&retained_mark).unwrap().borrow().ports.pp_free.len());
+            self.rule_activities.apc_apc_u_bind.mass -= (self.species_annots.get(&retained_mark).unwrap().borrow().ports.pp_free.len() * self.species_annots.get(&ejected_mark).unwrap().borrow().ports.pp_free.len()) + (self.species_annots.get(&ejected_mark).unwrap().borrow().ports.pp_free.len() * self.species_annots.get(&retained_mark).unwrap().borrow().ports.pp_free.len());
         }
     }
 }
