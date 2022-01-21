@@ -330,6 +330,9 @@ pub mod edge_types {
 }
 
 pub mod rule_activities {
+    use std::fmt;
+
+    #[derive(Debug)]
     pub struct RuleActivities {
         pub axn_axn_u_bind: MassActionTerm,
         pub axn_axn_b_bind: MassActionTerm,
@@ -353,9 +356,22 @@ pub mod rule_activities {
         pub apc_apc_b_free: MassActionTerm,
     }
 
+    impl fmt::Display for RuleActivities {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "Axn-Axn\n\tu bind: {}\n\tb bind: {}\n\tu free: {}\n\tb free: {}\nAp1_Axn\n\tu bind: {}\n\tb bind: {}\n\tu free: {}\n\tb free: {}\nAp2_Axn\n\tu bind: {}\n\tb bind: {}\n\tu free: {}\n\tb free: {}\nAp3_Axn\n\tu bind: {}\n\tb bind: {}\n\tu free: {}\n\tb free: {}\nApc_Apc\n\tu bind: {}\n\tb bind: {}\n\tu free: {}\n\tb free: {}\n", self.axn_axn_u_bind, self.axn_axn_b_bind, self.axn_axn_u_free, self.axn_axn_b_free, self.ap1_axn_u_bind, self.ap1_axn_b_bind, self.ap1_axn_u_free, self.ap1_axn_b_free, self.ap2_axn_u_bind, self.ap2_axn_b_bind, self.ap2_axn_u_free, self.ap2_axn_b_free, self.ap3_axn_u_bind, self.ap3_axn_b_bind, self.ap3_axn_u_free, self.ap3_axn_b_free, self.apc_apc_u_bind, self.apc_apc_b_bind, self.apc_apc_u_free, self.apc_apc_b_free)
+        }
+    }
+
+    #[derive(Debug)]
     pub struct MassActionTerm {
         pub mass: usize,
         pub rate: f64
+    }
+
+    impl fmt::Display for MassActionTerm {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "|{}| * {}", self.mass, self.rate)
+        }
     }
 
     pub struct RuleRates {
@@ -604,11 +620,11 @@ pub mod reaction_mixture {
                 ap3_axn_b_free: MassActionTerm{mass: 0, rate: rule_rates.ap3_axn_b_free},
                 apc_apc_u_free: MassActionTerm{mass: 0, rate: rule_rates.apc_apc_u_free},
                 apc_apc_b_free: MassActionTerm{mass: 0, rate: rule_rates.apc_apc_b_free},
-                axn_axn_b_bind: MassActionTerm{mass: x_mass * x_mass, rate: rule_rates.axn_axn_b_bind}, // all monomeric: everything that can happen is of binary binding type
+                axn_axn_b_bind: MassActionTerm{mass: x_mass * (x_mass-1), rate: rule_rates.axn_axn_b_bind}, // all monomeric: everything that can happen is of binary binding type
                 ap1_axn_b_bind: MassActionTerm{mass: p_mass * x_mass, rate: rule_rates.ap1_axn_b_bind},
                 ap2_axn_b_bind: MassActionTerm{mass: p_mass * x_mass, rate: rule_rates.ap2_axn_b_bind},
                 ap3_axn_b_bind: MassActionTerm{mass: p_mass * x_mass, rate: rule_rates.ap3_axn_b_bind},
-                apc_apc_b_bind: MassActionTerm{mass: p_mass * p_mass, rate: rule_rates.apc_apc_b_bind}
+                apc_apc_b_bind: MassActionTerm{mass: p_mass * (p_mass-1), rate: rule_rates.apc_apc_b_bind}
             };
             // unary embedding cache
             let uem = UnaryEmbeds::new_from_masses(x_mass, p_mass);
@@ -676,14 +692,50 @@ pub mod reaction_mixture {
         pub fn axn_axn_binary_bind(&mut self, head_node: NodeIndex, tail_node: NodeIndex) {
             // define which will be the "host" species, receiving the cache data from "eaten" species
             let (host_index, eaten_index) = if self.species_annots.get(&head_node).unwrap().borrow().size >= self.species_annots.get(&tail_node).unwrap().borrow().size {(head_node, tail_node)} else {(tail_node, head_node)};
+            // merge caches held by the species; uses interior-mutability pattern
+            assert!(self.species_annots.get(&head_node).unwrap().borrow_mut().ports.xh_free.remove(&head_node), "This head node was not listed as free in-species already, can't bind to it!");
+            assert!(self.species_annots.get(&tail_node).unwrap().borrow_mut().ports.xt_free.remove(&tail_node), "This tail node was not listed as free in-species already, can't bind to it!");
+            assert!(self.ports.xh_free.remove(&head_node), "This head node was not globally listed as free already, can't bind to it!");
+            assert!(self.ports.xt_free.remove(&tail_node), "This tail node was not globally listed as free already, can't bind to it!");
             // update rule activities
             //  for the Axn-Axn case, we can ignore the _free'ing activities
             //  for the other bond types, as we are not modifying those bond
             //  counts, ergo their unbinding counts
-            self.rule_activities.axn_axn_b_free.mass += 1;  //the new bond
+            let mut binary_combinatorics_lost_heads: usize = 0;
+            let mut binary_combinatorics_lost_tails: usize = 0;
+            for some_species in &self.species_set {
+                if some_species != self.species_annots.get(&head_node).unwrap() {
+                    binary_combinatorics_lost_heads += some_species.borrow().ports.xt_free.len()
+                }
+                if some_species != self.species_annots.get(&tail_node).unwrap() {
+                    binary_combinatorics_lost_tails += some_species.borrow().ports.xh_free.len()
+                }
+            }
+            let binary_combinatorics_lost: usize = binary_combinatorics_lost_heads + binary_combinatorics_lost_tails;
+            println!("node {} could have interacted with the tails at {:?}; while node {} with heads at {:?}", head_node.index(), self.species_annots.get(&tail_node).unwrap().borrow().ports.xt_free, tail_node.index(), self.species_annots.get(&head_node).unwrap().borrow().ports.xh_free);
+            let transformed_to_unary: usize = (self.species_annots.get(&host_index).unwrap().borrow().ports.xh_free.len() * self.species_annots.get(&eaten_index).unwrap().borrow().ports.xt_free.len()) + (self.species_annots.get(&eaten_index).unwrap().borrow().ports.xh_free.len() * self.species_annots.get(&host_index).unwrap().borrow().ports.xt_free.len());
+            let binary_embeds_made_here: usize = 1;     // the new bond
+            // since self-bonds are not allowed in this model,
+            //  this special-cases the Axn-Axn unary treatment,
+            //  discounting the monomer self-binding
+            let unary_combinatorics_lost_host: usize = 
+                if self.species_annots.get(&host_index).unwrap().borrow().size > 1 {
+                    self.species_annots.get(&host_index).unwrap().borrow().ports.xt_free.len()
+                }
+                else {0};
+            let unary_combinatorics_lost_eaten: usize =
+                if self.species_annots.get(&eaten_index).unwrap().borrow().size > 1 {
+                    self.species_annots.get(&eaten_index).unwrap().borrow().ports.xh_free.len()
+                }
+                else {0};
+            let unary_combinatorics_lost = unary_combinatorics_lost_host + unary_combinatorics_lost_eaten;
+            // iteractions of this head within host, and this tail within the eaten; ToDO monomer vs polymer?!
+            println!("transformed to unary: {}, bi-combis lost: {}, uni-combis lost: {}", transformed_to_unary, binary_combinatorics_lost, unary_combinatorics_lost);
+            self.rule_activities.axn_axn_b_free.mass += binary_embeds_made_here;  //the new bond
             //self.rule_activities.axn_axn_u_free.mass      // bi -> uni binding does not change the number of cycles in the system
-            self.rule_activities.axn_axn_b_bind.mass -= (self.species_annots.get(&host_index).unwrap().borrow().ports.xh_free.len() * self.species_annots.get(&eaten_index).unwrap().borrow().ports.xt_free.len()) + (self.species_annots.get(&eaten_index).unwrap().borrow().ports.xh_free.len() * self.species_annots.get(&host_index).unwrap().borrow().ports.xt_free.len());    // potential bindings that were binary, are now unary
-            self.rule_activities.axn_axn_u_bind.mass += (self.species_annots.get(&host_index).unwrap().borrow().ports.xh_free.len() * self.species_annots.get(&eaten_index).unwrap().borrow().ports.xt_free.len()) + (self.species_annots.get(&eaten_index).unwrap().borrow().ports.xh_free.len() * self.species_annots.get(&host_index).unwrap().borrow().ports.xt_free.len());    // and so one counter increases by the other's loss
+            self.rule_activities.axn_axn_b_bind.mass -= transformed_to_unary + binary_combinatorics_lost + binary_embeds_made_here;
+            self.rule_activities.axn_axn_u_bind.mass += transformed_to_unary - unary_combinatorics_lost;
+            //  the rest are unary -> binary convertions
             self.rule_activities.ap1_axn_b_bind.mass -= (self.species_annots.get(&host_index).unwrap().borrow().ports.p1_free.len() * self.species_annots.get(&eaten_index).unwrap().borrow().ports.xp_free.len()) + (self.species_annots.get(&eaten_index).unwrap().borrow().ports.p1_free.len() * self.species_annots.get(&host_index).unwrap().borrow().ports.xp_free.len());
             self.rule_activities.ap1_axn_u_bind.mass += (self.species_annots.get(&host_index).unwrap().borrow().ports.p1_free.len() * self.species_annots.get(&eaten_index).unwrap().borrow().ports.xp_free.len()) + (self.species_annots.get(&eaten_index).unwrap().borrow().ports.p1_free.len() * self.species_annots.get(&host_index).unwrap().borrow().ports.xp_free.len());
             self.rule_activities.ap2_axn_b_bind.mass -= (self.species_annots.get(&host_index).unwrap().borrow().ports.p2_free.len() * self.species_annots.get(&eaten_index).unwrap().borrow().ports.xp_free.len()) + (self.species_annots.get(&eaten_index).unwrap().borrow().ports.p2_free.len() * self.species_annots.get(&host_index).unwrap().borrow().ports.xp_free.len());
@@ -692,20 +744,15 @@ pub mod reaction_mixture {
             self.rule_activities.ap3_axn_u_bind.mass += (self.species_annots.get(&host_index).unwrap().borrow().ports.p3_free.len() * self.species_annots.get(&eaten_index).unwrap().borrow().ports.xp_free.len()) + (self.species_annots.get(&eaten_index).unwrap().borrow().ports.p3_free.len() * self.species_annots.get(&host_index).unwrap().borrow().ports.xp_free.len());
             self.rule_activities.apc_apc_b_bind.mass -= (self.species_annots.get(&host_index).unwrap().borrow().ports.pp_free.len() * self.species_annots.get(&eaten_index).unwrap().borrow().ports.pp_free.len()) + (self.species_annots.get(&eaten_index).unwrap().borrow().ports.pp_free.len() * self.species_annots.get(&host_index).unwrap().borrow().ports.pp_free.len());
             self.rule_activities.apc_apc_u_bind.mass += (self.species_annots.get(&host_index).unwrap().borrow().ports.pp_free.len() * self.species_annots.get(&eaten_index).unwrap().borrow().ports.pp_free.len()) + (self.species_annots.get(&eaten_index).unwrap().borrow().ports.pp_free.len() * self.species_annots.get(&host_index).unwrap().borrow().ports.pp_free.len());
-            // merge caches held by the species; uses interior-mutability pattern
             self.species_annots.get(&host_index).unwrap().borrow_mut().ports.update_from(&self.species_annots.get(&eaten_index).unwrap().borrow().ports);
             self.species_annots.get(&host_index).unwrap().borrow_mut().edges.update_from(&self.species_annots.get(&eaten_index).unwrap().borrow().edges);
             self.species_annots.get(&host_index).unwrap().borrow_mut().size += self.species_annots.get(&eaten_index).unwrap().borrow().size;
             self.species_annots.get(&host_index).unwrap().borrow_mut().agent_set.append(&mut self.species_annots.get(&eaten_index).unwrap().borrow().agent_set.clone());
-            // create edge & update terminus trackers
+            // create & update edge trackers
             let new_edge_index = self.universe_graph.add_edge(head_node, tail_node, false);
             let new_edge = Rc::new(RefCell::new(EdgeEnds{a: head_node, b: tail_node, a_s: 'h', b_s: 't', z: new_edge_index}));
-            self.species_annots.get_mut(&host_index).unwrap().borrow_mut().edges.xh_xt.insert(Rc::clone(&new_edge));
-            self.species_annots.get_mut(&host_index).unwrap().borrow_mut().ports.xh_free.remove(&head_node);
-            self.species_annots.get_mut(&host_index).unwrap().borrow_mut().ports.xt_free.remove(&tail_node);
+            self.species_annots.get(&host_index).unwrap().borrow_mut().edges.xh_xt.insert(Rc::clone(&new_edge));
             self.edges.xh_xt.insert(Rc::clone(&new_edge));
-            self.ports.xh_free.remove(&head_node);
-            self.ports.xt_free.remove(&tail_node);
             // update species annotation tracker
             let spec_ix: usize = self.species_set.binary_search(self.species_annots.get(&eaten_index).unwrap()).unwrap();
             self.species_set.remove(spec_ix);
@@ -774,7 +821,6 @@ pub mod reaction_mixture {
                     self.unary_binding_pairs.xh_xt[(p1_port.index(), p2_port.index())] = true;
                 }
             }
-
         }
 
         pub fn axn_axn_unary_unbind(&mut self, target_edge: Rc<RefCell<EdgeEnds>>) {
@@ -966,6 +1012,10 @@ pub mod reaction_mixture {
             self.rule_activities.ap3_axn_u_bind.mass -= (self.species_annots.get(&retained_mark).unwrap().borrow().ports.p3_free.len() * self.species_annots.get(&ejected_mark).unwrap().borrow().ports.xp_free.len()) + (self.species_annots.get(&ejected_mark).unwrap().borrow().ports.p3_free.len() * self.species_annots.get(&retained_mark).unwrap().borrow().ports.xp_free.len());
             self.rule_activities.apc_apc_b_bind.mass += (self.species_annots.get(&retained_mark).unwrap().borrow().ports.pp_free.len() * self.species_annots.get(&ejected_mark).unwrap().borrow().ports.pp_free.len()) + (self.species_annots.get(&ejected_mark).unwrap().borrow().ports.pp_free.len() * self.species_annots.get(&retained_mark).unwrap().borrow().ports.pp_free.len());
             self.rule_activities.apc_apc_u_bind.mass -= (self.species_annots.get(&retained_mark).unwrap().borrow().ports.pp_free.len() * self.species_annots.get(&ejected_mark).unwrap().borrow().ports.pp_free.len()) + (self.species_annots.get(&ejected_mark).unwrap().borrow().ports.pp_free.len() * self.species_annots.get(&retained_mark).unwrap().borrow().ports.pp_free.len());
+        }
+
+        pub fn print_rule_activities(&self) {
+            println!("{}", self.rule_activities)
         }
     }
 }
