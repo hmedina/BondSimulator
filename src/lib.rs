@@ -660,7 +660,8 @@ pub mod reaction_mixture {
             target_species.ports.xh_free.remove(&head_node);
             target_species.ports.xt_free.remove(&tail_node);
             // helper closure for bond resilience updates
-            let mut resilience_iterate_typed = |edge_iter: &BTreeSet<std::rc::Rc<std::cell::RefCell<EdgeEnds>>>| {
+            let mut resilience_iterate_typed = |edge_iter: &BTreeSet<std::rc::Rc<std::cell::RefCell<EdgeEnds>>>| -> usize {
+                let mut bonds_cyclized: usize = 0;
                 for boxed_edge in edge_iter {
                     let edge = boxed_edge.borrow();
                     let edge_id = self.universe_graph.find_edge(edge.a, edge.b).unwrap();
@@ -670,23 +671,47 @@ pub mod reaction_mixture {
                         counterfactual_graph.remove_edge(edge_id);
                         let path = astar(&counterfactual_graph, edge.a, |finish| finish == edge.b, |_| 1, |_| 0);
                         match path {
-                            Some(_) => {self.universe_graph.update_edge(edge.a, edge.b, true);},
+                            Some(_) => {self.universe_graph.update_edge(edge.a, edge.b, true); bonds_cyclized += 1;},
                             None => ()
                         }
                     }
                 }
+                bonds_cyclized
             };
             // update resilience of that species' edges
-            resilience_iterate_typed(&target_species.edges.xh_xt);
-            resilience_iterate_typed(&target_species.edges.p1_xp);
-            resilience_iterate_typed(&target_species.edges.p2_xp);
-            resilience_iterate_typed(&target_species.edges.p3_xp);
-            resilience_iterate_typed(&target_species.edges.pp_pp);
+            let xh_xt_cyclized: usize = resilience_iterate_typed(&target_species.edges.xh_xt);
+            let p1_xp_cyclized: usize = resilience_iterate_typed(&target_species.edges.p1_xp);
+            let p2_xp_cyclized: usize = resilience_iterate_typed(&target_species.edges.p2_xp);
+            let p3_xp_cyclized: usize = resilience_iterate_typed(&target_species.edges.p3_xp);
+            let pp_pp_cyclized: usize = resilience_iterate_typed(&target_species.edges.pp_pp);
+            //println!("Cyclization results:\n\txh_xt:\t{}\n\tp1_xp:\t{}\n\tp2_xp:\t{}\n\tp3_xp:\t{}\n\tpp_pp:\t{}", xh_xt_cyclized, p1_xp_cyclized, p2_xp_cyclized, p3_xp_cyclized, pp_pp_cyclized);
             // update rule activities
-            self.rule_activities.axn_axn_u_bind.mass -= 1;
-            self.rule_activities.axn_axn_u_free.mass += 1;
-            // update unary binding pair: one bond made
-            self.unary_binding_pairs.xh_xt[(head_node.index(), tail_node.index())] = false;
+            let binary_combinatorics_lost_heads: usize = self.ports.xt_free.len() - target_species.ports.xt_free.len();
+            let binary_combinatorics_lost_tails: usize = self.ports.xh_free.len() - target_species.ports.xh_free.len();
+            let binary_combinatorics_lost: usize = binary_combinatorics_lost_tails + binary_combinatorics_lost_heads;
+            let unary_embeds_made_here: usize = 1;
+            let unary_combinatorics_lost_head: usize = target_species.ports.xt_free.len();
+            let unary_combinatorics_lost_tail: usize = target_species.ports.xh_free.len();
+            let unary_combinatorics_lost: usize = unary_combinatorics_lost_head + unary_combinatorics_lost_tail;
+            //println!("bi-combis lost: {}, uni-combis lost: {}", binary_combinatorics_lost, unary_combinatorics_lost);
+            self.rule_activities.axn_axn_b_free.mass -= xh_xt_cyclized;
+            self.rule_activities.axn_axn_u_free.mass += unary_embeds_made_here + xh_xt_cyclized;     //the new bond
+            self.rule_activities.axn_axn_b_bind.mass -= binary_combinatorics_lost;
+            self.rule_activities.axn_axn_u_bind.mass -= unary_combinatorics_lost;
+            //  the rest are binary -> unary conversions
+            self.rule_activities.ap1_axn_u_free.mass += p1_xp_cyclized;
+            self.rule_activities.ap1_axn_b_free.mass -= p1_xp_cyclized;
+            self.rule_activities.ap2_axn_u_free.mass += p2_xp_cyclized;
+            self.rule_activities.ap2_axn_b_free.mass -= p2_xp_cyclized;
+            self.rule_activities.ap3_axn_u_free.mass += p3_xp_cyclized;
+            self.rule_activities.ap3_axn_b_free.mass -= p3_xp_cyclized;
+            self.rule_activities.apc_apc_u_free.mass += pp_pp_cyclized;
+            self.rule_activities.apc_apc_b_free.mass -= pp_pp_cyclized;
+            // update unaries
+            // this could be replaced with a for loop, iterating over the respective heads & tails for
+            //  this specific species, which may be faster than the nalgebra's fill_row | fill_column
+            self.unary_binding_pairs.xh_xt.fill_row(head_node.index(), false);
+            self.unary_binding_pairs.xh_xt.fill_column(tail_node.index(), false);
         }
     
         pub fn axn_axn_binary_bind(&mut self, head_node: NodeIndex, tail_node: NodeIndex) {
@@ -701,18 +726,9 @@ pub mod reaction_mixture {
             //  for the Axn-Axn case, we can ignore the _free'ing activities
             //  for the other bond types, as we are not modifying those bond
             //  counts, ergo their unbinding counts
-            let mut binary_combinatorics_lost_heads: usize = 0;
-            let mut binary_combinatorics_lost_tails: usize = 0;
-            for some_species in &self.species_set {
-                if some_species != self.species_annots.get(&head_node).unwrap() {
-                    binary_combinatorics_lost_heads += some_species.borrow().ports.xt_free.len()
-                }
-                if some_species != self.species_annots.get(&tail_node).unwrap() {
-                    binary_combinatorics_lost_tails += some_species.borrow().ports.xh_free.len()
-                }
-            }
+            let binary_combinatorics_lost_heads: usize = self.ports.xt_free.len() - self.species_annots.get(&head_node).unwrap().borrow().ports.xt_free.len();
+            let binary_combinatorics_lost_tails: usize = self.ports.xh_free.len() - self.species_annots.get(&tail_node).unwrap().borrow().ports.xh_free.len();
             let binary_combinatorics_lost: usize = binary_combinatorics_lost_heads + binary_combinatorics_lost_tails;
-            println!("node {} could have interacted with the tails at {:?}; while node {} with heads at {:?}", head_node.index(), self.species_annots.get(&tail_node).unwrap().borrow().ports.xt_free, tail_node.index(), self.species_annots.get(&head_node).unwrap().borrow().ports.xh_free);
             let transformed_to_unary: usize = (self.species_annots.get(&host_index).unwrap().borrow().ports.xh_free.len() * self.species_annots.get(&eaten_index).unwrap().borrow().ports.xt_free.len()) + (self.species_annots.get(&eaten_index).unwrap().borrow().ports.xh_free.len() * self.species_annots.get(&host_index).unwrap().borrow().ports.xt_free.len());
             let binary_embeds_made_here: usize = 1;     // the new bond
             // since self-bonds are not allowed in this model,
@@ -730,12 +746,12 @@ pub mod reaction_mixture {
                 else {0};
             let unary_combinatorics_lost = unary_combinatorics_lost_host + unary_combinatorics_lost_eaten;
             // iteractions of this head within host, and this tail within the eaten; ToDO monomer vs polymer?!
-            println!("transformed to unary: {}, bi-combis lost: {}, uni-combis lost: {}", transformed_to_unary, binary_combinatorics_lost, unary_combinatorics_lost);
+            //println!("transformed to unary: {}, bi-combis lost: {}, uni-combis lost: {}", transformed_to_unary, binary_combinatorics_lost, unary_combinatorics_lost);
             self.rule_activities.axn_axn_b_free.mass += binary_embeds_made_here;  //the new bond
-            //self.rule_activities.axn_axn_u_free.mass      // bi -> uni binding does not change the number of cycles in the system
+            //self.rule_activities.axn_axn_u_free.mass      // does not apply
             self.rule_activities.axn_axn_b_bind.mass -= transformed_to_unary + binary_combinatorics_lost + binary_embeds_made_here;
             self.rule_activities.axn_axn_u_bind.mass += transformed_to_unary - unary_combinatorics_lost;
-            //  the rest are unary -> binary convertions
+            //  the rest are unary -> binary conversions
             self.rule_activities.ap1_axn_b_bind.mass -= (self.species_annots.get(&host_index).unwrap().borrow().ports.p1_free.len() * self.species_annots.get(&eaten_index).unwrap().borrow().ports.xp_free.len()) + (self.species_annots.get(&eaten_index).unwrap().borrow().ports.p1_free.len() * self.species_annots.get(&host_index).unwrap().borrow().ports.xp_free.len());
             self.rule_activities.ap1_axn_u_bind.mass += (self.species_annots.get(&host_index).unwrap().borrow().ports.p1_free.len() * self.species_annots.get(&eaten_index).unwrap().borrow().ports.xp_free.len()) + (self.species_annots.get(&eaten_index).unwrap().borrow().ports.p1_free.len() * self.species_annots.get(&host_index).unwrap().borrow().ports.xp_free.len());
             self.rule_activities.ap2_axn_b_bind.mass -= (self.species_annots.get(&host_index).unwrap().borrow().ports.p2_free.len() * self.species_annots.get(&eaten_index).unwrap().borrow().ports.xp_free.len()) + (self.species_annots.get(&eaten_index).unwrap().borrow().ports.p2_free.len() * self.species_annots.get(&host_index).unwrap().borrow().ports.xp_free.len());
