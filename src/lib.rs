@@ -2,6 +2,10 @@ pub mod agent_types {
     use petgraph::prelude::*;
 
     #[derive(Debug)]
+    /**
+     * Structure for an Axn type-node. The fields hold either a None when unbound, or a 
+     * `Some(EdgeIndex)` when bound. One field per binding site.
+    */
     pub struct AxnNode {
         pub x1_bond: Option<EdgeIndex>,
         pub x2_bond: Option<EdgeIndex>,
@@ -19,6 +23,10 @@ pub mod agent_types {
     }   
 
     #[derive(Debug)]
+    /**
+     * Structure for an APC type-node. The fields hold either a None when unbound, or a
+     * `Some(EdgeIndex)` when bound. One field per binding site.
+    */
     pub struct ApcNode {
         pub p1_bond: Option<EdgeIndex>,
         pub p2_bond: Option<EdgeIndex>,
@@ -49,9 +57,11 @@ pub mod edge_ends {
     use petgraph::prelude::*;
 
     #[derive(Clone, Copy, Debug)]
+    /** 
+     * Structure whose fields store the NodeIndexes of the binding pair in `a` & `b`, the site type
+     * (to resolve parallel edges), and the EdgeIndex in `z` from the UniverseGraph.
+    */
     pub struct EdgeEnds {
-        // holds the node indexes for the bond termini
-        // char holds the site name; this allows "parallel" edge resolution via site-name awareness
         pub a: NodeIndex,
         pub b: NodeIndex,
         pub a_s: char,
@@ -86,8 +96,10 @@ pub mod open_ports {
     use petgraph::prelude::NodeIndex;
 
     #[derive(Debug)]
+    /** 
+     * Structure of HashSets, one per site type. The HashSets hold NodeIndexes, from the UniverseGraph.
+     */
     pub struct OpenPorts {
-        // sets of NodeIndexes, from the universe_graph
         pub xh_free: HashSet<NodeIndex>,
         pub xt_free: HashSet<NodeIndex>,
         pub xp_free: HashSet<NodeIndex>,
@@ -98,6 +110,9 @@ pub mod open_ports {
     }
     
     impl OpenPorts {
+        /**
+         * Update every site-specific HashSet with the elements from the other.
+        */
         pub fn update_from(&mut self, other: &Self) {
             for item in &other.xh_free {
                 self.xh_free.insert(*item);
@@ -122,8 +137,13 @@ pub mod open_ports {
             }
         }
 
-        // this would be simplified by "drain_filter" moving out of the Nightly-only
+        /**
+         * Partition the site-specific HashSets using a set of NodeIndexes, the "ejected" nodes.
+         * A free site belonging to one of the agents in the ejected set, gets ejected and returned
+         * in a new OpenPort object. Sites not belonging to agents in the ejected set are retained.
+        */
         pub fn eject_where(&mut self, ejected_nodes: &BTreeSet<NodeIndex>) -> Self {
+            // this would be simplified by "drain_filter" moving out of the Nightly-only
             let mut xh_ejected: HashSet<NodeIndex> = HashSet::new();
             let mut xt_ejected: HashSet<NodeIndex> = HashSet::new();
             let mut xp_ejected: HashSet<NodeIndex> = HashSet::new();
@@ -186,6 +206,11 @@ pub mod open_ports {
             }
         }
 
+        /**
+         * When introduced as a monomer, an Axn-type species contains only itself in the Axn-type
+         * free-site sets. It contains nothing in the APC-type free-site sets, as there are no
+         * APCs in this species.
+        */
         pub fn default_axn(ix: NodeIndex) -> Self {
             let mut s: HashSet<NodeIndex> = HashSet::new();
             s.insert(ix);
@@ -200,6 +225,11 @@ pub mod open_ports {
             }
         }
 
+        /**
+         * When introduced as a monomer, an APC-type species contains only itself in the APC-type
+         * free-site sets. It contains nothing in the Axn-type free-site sets, as there are no
+         * Axns in this species.
+        */
         pub fn default_apc(ix: NodeIndex) -> Self {
             let mut s: HashSet<NodeIndex> = HashSet::new();
             s.insert(ix);
@@ -214,15 +244,19 @@ pub mod open_ports {
             }
         }
 
-        pub fn default_empty() -> Self {
+        /**
+         * When constructing the universal tracker, pre-allocate based on the mass sizes, leaving
+         * the values empty.
+        */
+        pub fn default_empty(axn_mass: usize, apc_mass: usize) -> Self {
             OpenPorts {
-                xh_free: HashSet::new(),
-                xt_free: HashSet::new(),
-                xp_free: HashSet::new(),
-                p1_free: HashSet::new(),
-                p2_free: HashSet::new(),
-                p3_free: HashSet::new(),
-                pp_free: HashSet::new()
+                xh_free: HashSet::with_capacity(axn_mass),
+                xt_free: HashSet::with_capacity(axn_mass),
+                xp_free: HashSet::with_capacity(axn_mass),
+                p1_free: HashSet::with_capacity(apc_mass),
+                p2_free: HashSet::with_capacity(apc_mass),
+                p3_free: HashSet::with_capacity(apc_mass),
+                pp_free: HashSet::with_capacity(apc_mass)
             }
         }
     }
@@ -236,8 +270,10 @@ pub mod edge_types {
     use crate::edge_ends::EdgeEnds;
 
     #[derive(Debug)]
+    /** 
+     * Structure of BTreeSets, one per bond type, holding <Rc<RefCell<EdgeEnds>>>.
+     */
     pub struct EdgeTypes {
-        // sets of edges, defined by their ends (node id & site names)
         pub xh_xt: BTreeSet<Rc<RefCell<EdgeEnds>>>,
         pub p1_xp: BTreeSet<Rc<RefCell<EdgeEnds>>>,
         pub p2_xp: BTreeSet<Rc<RefCell<EdgeEnds>>>,
@@ -246,6 +282,9 @@ pub mod edge_types {
     }
     
     impl EdgeTypes {
+        /**
+         * Update this instance with the elements from the other EdgeType structure.
+        */
         pub fn update_from(&mut self, other: &Self) {
             for item in &other.xh_xt {
                 self.xh_xt.insert(Rc::clone(&item));
@@ -264,8 +303,15 @@ pub mod edge_types {
             }
         }
 
-        // this would be simplified by "drain_filter" moving out of the Nightly-only
+        /**
+         * Partition the site-specific BTreeSets using a set of NodeIndexes, the "ejected" nodes.
+         * A bond where both agents belong to the ejected set, gets ejected and returned
+         * in a new EdgeType object. Bonds where both agents do not belong to agents in the
+         * ejected set are retained. If one agent is ejected but another retained, this function
+         * panics, as it should not be breaking cycles as a side-effect.
+        */
         pub fn eject_where(&mut self, ejected_nodes: &BTreeSet<NodeIndex>) -> Self {
+            // this would be simplified by "drain_filter" moving out of the Nightly-only
             let mut xh_xt_ejected: BTreeSet<Rc<RefCell<EdgeEnds>>> = BTreeSet::new();
             let mut p1_xp_ejected: BTreeSet<Rc<RefCell<EdgeEnds>>> = BTreeSet::new();
             let mut p2_xp_ejected: BTreeSet<Rc<RefCell<EdgeEnds>>> = BTreeSet::new();
@@ -402,6 +448,10 @@ pub mod unary_embeds {
     use nalgebra::*;
 
     #[derive(Debug)]
+    /** 
+     * Structure of boolean matrices, one per bond type. The value flags an interaction as allowed
+     * via unary interactions (i.e. the agents belong to the same connected component).
+    */
     pub struct UnaryEmbeds {
         pub xh_xt: DMatrix<bool>,
         pub p1_xp: DMatrix<bool>,
@@ -492,7 +542,7 @@ pub mod reaction_mixture {
         ports: OpenPorts,                                                   // struct with vector, each a list of agent indexes
         edges: EdgeTypes,
         edge_index_map: BTreeMap<EdgeIndex, Rc<RefCell<EdgeEnds>>>,         // used to update Z when removing bonds from the universe graph
-        unary_binding_pairs: UnaryEmbeds,                                   // structure of matrices holding booleans
+        unary_binding_pairs: UnaryEmbeds,
         rule_activities: RuleActivities
     }
     
@@ -565,12 +615,13 @@ pub mod reaction_mixture {
         }
 
         pub fn new_from_monomers(x_mass: usize, p_mass: usize, rule_rates: RuleRates) -> Mixture {
-            // the universe graph
-            let mut net: Graph<AgentType, bool, Undirected> = Graph::with_capacity(x_mass + p_mass, x_mass * 3 + p_mass * 4);
-            // the species map & global open ports caches
-            let mut spc: BTreeMap<NodeIndex, Rc<RefCell<MixtureSpecies>>> = BTreeMap::new();
-            let mut sps: VecDeque<Rc<RefCell<MixtureSpecies>>> = VecDeque::with_capacity(x_mass + p_mass);
-            let mut opr = OpenPorts::default_empty();
+            let mut net: Graph<AgentType, bool, Undirected> = Graph::with_capacity(x_mass + p_mass, x_mass * 3 + p_mass * 4);   // the universe graph
+            let mut spc: BTreeMap<NodeIndex, Rc<RefCell<MixtureSpecies>>> = BTreeMap::new();                                    // the global agent -> species map
+            let mut sps: VecDeque<Rc<RefCell<MixtureSpecies>>> = VecDeque::with_capacity(x_mass + p_mass);                      // the species set
+            let edg = EdgeTypes::default_empty();                                                                               // the edge-type tracker
+            let uem = UnaryEmbeds::new_from_masses(x_mass, p_mass);                                                             // unary embedding cache
+            let eim = BTreeMap::new();                                                                                          // the global edge-index -> EdgeEnds map
+            let mut opr = OpenPorts::default_empty(x_mass, p_mass);                                                             // the open ports tracker
             for _i in 0..x_mass {
                 let node_ix = net.add_node(AgentType::AxnNode(None, None, None));
                 let mut node_set = BTreeSet::new();
@@ -602,24 +653,21 @@ pub mod reaction_mixture {
                 opr.p3_free.insert(node_ix);
                 opr.pp_free.insert(node_ix);
             }
-            // edge cache
-            let edg = EdgeTypes::default_empty();
-            // rule activities
             let rac = RuleActivities {
                 axn_axn_u_bind: MassActionTerm{mass: 0, rate: rule_rates.axn_axn_u_bind}, // all monomeric: there are no unary binding opportunities
                 ap1_axn_u_bind: MassActionTerm{mass: 0, rate: rule_rates.ap1_axn_u_bind},
                 ap2_axn_u_bind: MassActionTerm{mass: 0, rate: rule_rates.ap2_axn_u_bind},
                 ap3_axn_u_bind: MassActionTerm{mass: 0, rate: rule_rates.ap3_axn_u_bind},
                 apc_apc_u_bind: MassActionTerm{mass: 0, rate: rule_rates.apc_apc_u_bind},
-                axn_axn_u_free: MassActionTerm{mass: 0, rate: rule_rates.axn_axn_u_free}, // all monomeric: no bonds to break, cycles or no cycles
-                axn_axn_b_free: MassActionTerm{mass: 0, rate: rule_rates.axn_axn_b_free},
+                axn_axn_u_free: MassActionTerm{mass: 0, rate: rule_rates.axn_axn_u_free}, // all monomeric: no cycles to open
                 ap1_axn_u_free: MassActionTerm{mass: 0, rate: rule_rates.ap1_axn_u_free},
-                ap1_axn_b_free: MassActionTerm{mass: 0, rate: rule_rates.ap1_axn_b_free},
                 ap2_axn_u_free: MassActionTerm{mass: 0, rate: rule_rates.ap2_axn_u_free},
-                ap2_axn_b_free: MassActionTerm{mass: 0, rate: rule_rates.ap2_axn_b_free},
                 ap3_axn_u_free: MassActionTerm{mass: 0, rate: rule_rates.ap3_axn_u_free},
-                ap3_axn_b_free: MassActionTerm{mass: 0, rate: rule_rates.ap3_axn_b_free},
                 apc_apc_u_free: MassActionTerm{mass: 0, rate: rule_rates.apc_apc_u_free},
+                axn_axn_b_free: MassActionTerm{mass: 0, rate: rule_rates.axn_axn_b_free}, // all monomeric: no complexes to break apart
+                ap1_axn_b_free: MassActionTerm{mass: 0, rate: rule_rates.ap1_axn_b_free},
+                ap2_axn_b_free: MassActionTerm{mass: 0, rate: rule_rates.ap2_axn_b_free},
+                ap3_axn_b_free: MassActionTerm{mass: 0, rate: rule_rates.ap3_axn_b_free},
                 apc_apc_b_free: MassActionTerm{mass: 0, rate: rule_rates.apc_apc_b_free},
                 axn_axn_b_bind: MassActionTerm{mass: x_mass * (x_mass-1), rate: rule_rates.axn_axn_b_bind}, // all monomeric: everything that can happen is of binary binding type
                 ap1_axn_b_bind: MassActionTerm{mass: p_mass * x_mass, rate: rule_rates.ap1_axn_b_bind},
@@ -627,9 +675,6 @@ pub mod reaction_mixture {
                 ap3_axn_b_bind: MassActionTerm{mass: p_mass * x_mass, rate: rule_rates.ap3_axn_b_bind},
                 apc_apc_b_bind: MassActionTerm{mass: p_mass * (p_mass-1), rate: rule_rates.apc_apc_b_bind}
             };
-            // unary embedding cache
-            let uem = UnaryEmbeds::new_from_masses(x_mass, p_mass);
-            let eim = BTreeMap::new();
             // bringing it all together
             Mixture {universe_graph: net, species_annots: spc, ports: opr, edges: edg, rule_activities: rac, species_set: sps, unary_binding_pairs: uem, edge_index_map: eim}
         }
@@ -750,11 +795,11 @@ pub mod reaction_mixture {
                 }
                 else {0};
             let unary_combinatorics_lost = unary_combinatorics_lost_head + unary_combinatorics_lost_tail;
-            // iteractions of this head within host, and this tail within the eaten
-            self.rule_activities.axn_axn_b_free.mass += binary_embeds_made_here;  //the new bond
+            self.rule_activities.axn_axn_b_free.mass += binary_embeds_made_here;                    // the new bond
             //self.rule_activities.axn_axn_u_free.mass      // does not apply
             self.rule_activities.axn_axn_b_bind.mass -= transformed_to_unary + binary_combinatorics_lost + binary_embeds_made_here;
-            self.rule_activities.axn_axn_u_bind.mass += transformed_to_unary - unary_combinatorics_lost;
+            self.rule_activities.axn_axn_u_bind.mass += transformed_to_unary;                       // broken into two operations to avoid underflowing
+            self.rule_activities.axn_axn_u_bind.mass -= unary_combinatorics_lost;                   // when the former is 0, but the latter is non-zero
             //  the rest are unary -> binary conversions
             self.rule_activities.ap1_axn_b_bind.mass -= (self.species_annots.get(&host_index).unwrap().borrow().ports.p1_free.len() * self.species_annots.get(&eaten_index).unwrap().borrow().ports.xp_free.len()) + (self.species_annots.get(&eaten_index).unwrap().borrow().ports.p1_free.len() * self.species_annots.get(&host_index).unwrap().borrow().ports.xp_free.len());
             self.rule_activities.ap1_axn_u_bind.mass += (self.species_annots.get(&host_index).unwrap().borrow().ports.p1_free.len() * self.species_annots.get(&eaten_index).unwrap().borrow().ports.xp_free.len()) + (self.species_annots.get(&eaten_index).unwrap().borrow().ports.p1_free.len() * self.species_annots.get(&host_index).unwrap().borrow().ports.xp_free.len());
@@ -1142,13 +1187,7 @@ pub mod reaction_mixture {
                 }
             }
             // update self.rule_activities
-            //  for the Axn-Axn case, we can ignore the _free'ing activities
-            //  for the other bond types, as we are not modifying those bond
-            //  counts, ergo their unbinding counts
             let binary_embeds_made_here: usize = 1;
-            let binary_combinatorics_gained_head: usize = self.species_annots.get(&tail_node).unwrap().borrow().ports.xt_free.len();        // the bond possibility for this unbiding event will be present in both;
-            let binary_combinatorics_gained_tail: usize = self.species_annots.get(&head_node).unwrap().borrow().ports.xh_free.len() - 1;    // correct by substracting 1
-            let binary_combinatorics_gained: usize = binary_combinatorics_gained_head + binary_combinatorics_gained_tail;
             // since self-bonds are not allowed in this model,
             //  this special-cases the Axn-Axn unary treatment,
             //  discounting the monomer self-binding
@@ -1165,11 +1204,19 @@ pub mod reaction_mixture {
             let transformed_to_binary: usize = 
                 (self.species_annots.get(&tail_node).unwrap().borrow().ports.xt_free.len() * self.species_annots.get(&head_node).unwrap().borrow().ports.xh_free.len()) + 
                 (self.species_annots.get(&tail_node).unwrap().borrow().ports.xh_free.len() * self.species_annots.get(&head_node).unwrap().borrow().ports.xt_free.len()) -
-                binary_combinatorics_gained;
-            self.rule_activities.axn_axn_b_free.mass -= binary_embeds_made_here;  // the bond we just broke
+                binary_embeds_made_here;                                                                                                    // correct for the bond we just broke
+            // for the Axn-Axn case, we can ignore the _free'ing activities
+            //  for the other bond types, as we are not modifying those bond
+            //  counts, ergo their unbinding counts
+            let binary_combinatorics_gained_head: usize = self.ports.xt_free.len() - self.species_annots.get(&head_node).unwrap().borrow().ports.xt_free.len() - 1;    // the bond that would bind the tail & head nodes will
+            let binary_combinatorics_gained_tail: usize = self.ports.xh_free.len() - self.species_annots.get(&tail_node).unwrap().borrow().ports.xh_free.len();        // be present in both; substract 1 to correct count
+            let binary_combinatorics_gained: usize = binary_combinatorics_gained_head + binary_combinatorics_gained_tail;
+            println!("bis gained {}, unis gained {}, transformed to binary {}", binary_combinatorics_gained, unary_combinatorics_gained, transformed_to_binary);
+            self.rule_activities.axn_axn_b_free.mass -= binary_embeds_made_here;                                                            // the bond we just broke
             //self.rule_activities.axn_axn_u_free.mass      // does not apply
             self.rule_activities.axn_axn_b_bind.mass += binary_combinatorics_gained + transformed_to_binary;
-            self.rule_activities.axn_axn_u_bind.mass += unary_combinatorics_gained - transformed_to_binary;
+            self.rule_activities.axn_axn_u_bind.mass += unary_combinatorics_gained;             // broken into two operations to avoid underflowing
+            self.rule_activities.axn_axn_u_bind.mass -= transformed_to_binary;                  // when the former is 0, but the latter is non-zero
             //  the rest are unary -> binary conversions
             self.rule_activities.ap1_axn_b_bind.mass += (self.species_annots.get(&retained_mark).unwrap().borrow().ports.p1_free.len() * self.species_annots.get(&ejected_mark).unwrap().borrow().ports.xp_free.len()) + (self.species_annots.get(&ejected_mark).unwrap().borrow().ports.p1_free.len() * self.species_annots.get(&retained_mark).unwrap().borrow().ports.xp_free.len());
             self.rule_activities.ap1_axn_u_bind.mass -= (self.species_annots.get(&retained_mark).unwrap().borrow().ports.p1_free.len() * self.species_annots.get(&ejected_mark).unwrap().borrow().ports.xp_free.len()) + (self.species_annots.get(&ejected_mark).unwrap().borrow().ports.p1_free.len() * self.species_annots.get(&retained_mark).unwrap().borrow().ports.xp_free.len());

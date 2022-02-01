@@ -44,19 +44,30 @@ fn main() {
     println!("{}", my_mix.to_kappa());
     my_mix.print_rule_activities();
     
-    my_mix.axn_axn_binary_unbind(Rc::new(RefCell::new(EdgeEnds{a: NodeIndex::new(1),
-                                                              b: NodeIndex::new(2), 
-                                                              a_s: 'h', 
-                                                              b_s: 't', 
-                                                              z: EdgeIndex::new(2)})));
+    my_mix.axn_axn_binary_unbind(Rc::new(RefCell::new(EdgeEnds{
+        a: NodeIndex::new(1),
+        b: NodeIndex::new(2), 
+        a_s: 'h', 
+        b_s: 't', 
+        z: EdgeIndex::new(2)})));
     println!("{}", my_mix.to_kappa());
     my_mix.print_rule_activities();
     
-    //my_mix.axn_axn_binary_unbind(Rc::new(RefCell::new(EdgeEnds{a: NodeIndex::new(0),
-    //                                                           b: NodeIndex::new(3),
-    //                                                           a_s: 'h',
-    //                                                           b_s: 't',
-    //                                                           z: EdgeIndex::new(0)})));
-    //println!("{}", my_mix.to_kappa());
-    //my_mix.print_rule_activities();
+    my_mix.axn_axn_binary_unbind(Rc::new(RefCell::new(EdgeEnds{
+        a: NodeIndex::new(2),
+        b: NodeIndex::new(0),
+        a_s: 'h',
+        b_s: 't',
+        z: EdgeIndex::new(1)})));
+    println!("{}", my_mix.to_kappa());
+    my_mix.print_rule_activities();
+
+    my_mix.axn_axn_binary_unbind(Rc::new(RefCell::new(EdgeEnds{
+        a: NodeIndex::new(0),
+        b: NodeIndex::new(3),
+        a_s: 'h',
+        b_s: 't',
+        z: EdgeIndex::new(0)})));
+    println!("{}", my_mix.to_kappa());
+    my_mix.print_rule_activities();
 }
