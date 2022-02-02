@@ -378,7 +378,7 @@ pub mod edge_types {
 pub mod rule_activities {
     use std::fmt;
 
-    #[derive(Debug)]
+    #[derive(Clone, Debug, PartialEq)]
     pub struct RuleActivities {
         pub axn_axn_u_bind: MassActionTerm,
         pub axn_axn_b_bind: MassActionTerm,
@@ -408,7 +408,7 @@ pub mod rule_activities {
         }
     }
 
-    #[derive(Debug)]
+    #[derive(Clone, Debug, PartialEq)]
     pub struct MassActionTerm {
         pub mass: usize,
         pub rate: f64
@@ -543,17 +543,25 @@ pub mod reaction_mixture {
         edges: EdgeTypes,
         edge_index_map: BTreeMap<EdgeIndex, Rc<RefCell<EdgeEnds>>>,         // used to update Z when removing bonds from the universe graph
         unary_binding_pairs: UnaryEmbeds,
-        rule_activities: RuleActivities
+        pub rule_activities: RuleActivities
     }
     
     impl Mixture {
+        /**
+         * Yield a snapshot representation that can be printed or compared against others in a
+         * kappa-aware way.
+        */
         pub fn to_kappa(&self) -> String {
             // printer
             let mut mixture_string: String = String::new();
             mixture_string.push_str("# synthetic mixture\n\n");
             let debug_str = format!("# mixture has {} nodes and {} edges\n", self.universe_graph.node_count(), self.universe_graph.edge_count());
             mixture_string.push_str(&debug_str);
-            for this_species_ref in &self.species_set {
+            // sort the species set
+            //a) make it contiguous
+            let mut cloned_species = self.species_set.clone();
+            cloned_species.make_contiguous().sort();
+            for this_species_ref in cloned_species {
                 let this_species = this_species_ref.borrow();
                 let size_annot: String = format!("init: 1 /*{} agents*/ ", this_species.size);
                 let mut species_string: String = String::new();
@@ -1211,7 +1219,6 @@ pub mod reaction_mixture {
             let binary_combinatorics_gained_head: usize = self.ports.xt_free.len() - self.species_annots.get(&head_node).unwrap().borrow().ports.xt_free.len() - 1;    // the bond that would bind the tail & head nodes will
             let binary_combinatorics_gained_tail: usize = self.ports.xh_free.len() - self.species_annots.get(&tail_node).unwrap().borrow().ports.xh_free.len();        // be present in both; substract 1 to correct count
             let binary_combinatorics_gained: usize = binary_combinatorics_gained_head + binary_combinatorics_gained_tail;
-            println!("bis gained {}, unis gained {}, transformed to binary {}", binary_combinatorics_gained, unary_combinatorics_gained, transformed_to_binary);
             self.rule_activities.axn_axn_b_free.mass -= binary_embeds_made_here;                                                            // the bond we just broke
             //self.rule_activities.axn_axn_u_free.mass      // does not apply
             self.rule_activities.axn_axn_b_bind.mass += binary_combinatorics_gained + transformed_to_binary;
@@ -1231,5 +1238,89 @@ pub mod reaction_mixture {
         pub fn print_rule_activities(&self) {
             println!("{}", self.rule_activities)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{rule_activities::RuleRates, reaction_mixture::Mixture, edge_ends::EdgeEnds};
+    use petgraph::prelude::{NodeIndex, EdgeIndex};
+    use std::{rc::Rc, cell::RefCell};
+
+    #[test]
+    fn binary_reversability() {
+        let my_rates = RuleRates {
+            axn_axn_u_bind: 1.0,
+            axn_axn_b_bind: 1.0,
+            axn_axn_u_free: 1.0,
+            axn_axn_b_free: 1.0,
+            ap1_axn_u_bind: 1.0,
+            ap1_axn_b_bind: 1.0,
+            ap1_axn_u_free: 1.0,
+            ap1_axn_b_free: 1.0,
+            ap2_axn_u_bind: 1.0,
+            ap2_axn_b_bind: 1.0,
+            ap2_axn_u_free: 1.0,
+            ap2_axn_b_free: 1.0,
+            ap3_axn_u_bind: 1.0,
+            ap3_axn_b_bind: 1.0,
+            ap3_axn_u_free: 1.0,
+            ap3_axn_b_free: 1.0,
+            apc_apc_u_bind: 1.0,
+            apc_apc_b_bind: 1.0,
+            apc_apc_u_free: 1.0,
+            apc_apc_b_free: 1.0,
+        };
+        let mut my_mix = Mixture::new_from_monomers(4, 2, my_rates);
+        let kappa_event_0 = my_mix.to_kappa();
+        let act_event_0 = my_mix.rule_activities.clone();
+        
+        my_mix.axn_axn_binary_bind(NodeIndex::from(0), NodeIndex::from(3));
+        let kappa_event_1 = my_mix.to_kappa();
+        let act_event_1 = my_mix.rule_activities.clone();
+        
+        my_mix.axn_axn_binary_bind(NodeIndex::from(2), NodeIndex::from(0));
+        let kappa_event_2 = my_mix.to_kappa();
+        let act_event_2 = my_mix.rule_activities.clone();
+        
+        my_mix.axn_axn_binary_bind(NodeIndex::from(1), NodeIndex::from(2));
+        let kappa_event_3 = my_mix.to_kappa();
+        let act_event_3 = my_mix.rule_activities.clone();
+        
+        my_mix.axn_axn_binary_unbind(Rc::new(RefCell::new(EdgeEnds{
+            a: NodeIndex::new(1),
+            b: NodeIndex::new(2), 
+            a_s: 'h', 
+            b_s: 't', 
+            z: EdgeIndex::new(2)})));
+        let kappa_event_4 = my_mix.to_kappa();
+        let act_event_4 = my_mix.rule_activities.clone();
+
+        assert_eq!(kappa_event_2, kappa_event_4);
+        assert_eq!(act_event_2, act_event_4);
+        
+        my_mix.axn_axn_binary_unbind(Rc::new(RefCell::new(EdgeEnds{
+            a: NodeIndex::new(2),
+            b: NodeIndex::new(0),
+            a_s: 'h',
+            b_s: 't',
+            z: EdgeIndex::new(1)})));
+        let kappa_event_5 = my_mix.to_kappa();
+        let act_event_5 = my_mix.rule_activities.clone();
+
+        assert_eq!(kappa_event_1, kappa_event_5);
+        assert_eq!(act_event_1, act_event_5);
+    
+        my_mix.axn_axn_binary_unbind(Rc::new(RefCell::new(EdgeEnds{
+            a: NodeIndex::new(0),
+            b: NodeIndex::new(3),
+            a_s: 'h',
+            b_s: 't',
+            z: EdgeIndex::new(0)})));
+        let kappa_event_6 = my_mix.to_kappa();
+        let act_event_6 = my_mix.rule_activities.clone();
+
+        assert_eq!(kappa_event_0, kappa_event_6);
+        assert_eq!(act_event_0, act_event_6);
     }
 }
