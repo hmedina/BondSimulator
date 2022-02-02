@@ -510,22 +510,25 @@ pub mod reaction_mixture {
 
     impl Ord for MixtureSpecies {
         fn cmp(&self, other: &Self) -> Ordering {
-            if self.agent_set == other.agent_set {
-                if self.edges.xh_xt == other.edges.xh_xt {
-                    if self.edges.p1_xp == other.edges.p1_xp {
-                        if self.edges.p2_xp == other.edges.p2_xp {
-                            if self.edges.p3_xp == other.edges.p3_xp {
-                                self.edges.pp_pp.cmp(&other.edges.pp_pp)
+            if self.size == other.size {
+                if self.agent_set == other.agent_set {
+                    if self.edges.xh_xt == other.edges.xh_xt {
+                        if self.edges.p1_xp == other.edges.p1_xp {
+                            if self.edges.p2_xp == other.edges.p2_xp {
+                                if self.edges.p3_xp == other.edges.p3_xp {
+                                    self.edges.pp_pp.cmp(&other.edges.pp_pp)
+                                }
+                                else {self.edges.p3_xp.cmp(&other.edges.p3_xp)}
                             }
-                            else {self.edges.p3_xp.cmp(&other.edges.p3_xp)}
+                            else {self.edges.p2_xp.cmp(&other.edges.p2_xp)}
                         }
-                        else {self.edges.p2_xp.cmp(&other.edges.p2_xp)}
+                        else {self.edges.p1_xp.cmp(&other.edges.p2_xp)}
                     }
-                    else {self.edges.p1_xp.cmp(&other.edges.p2_xp)}
+                    else {self.edges.xh_xt.cmp(&other.edges.xh_xt)}
                 }
-                else {self.edges.xh_xt.cmp(&other.edges.xh_xt)}
+                else {self.agent_set.cmp(&other.agent_set)}
             }
-            else {self.agent_set.cmp(&other.agent_set)}
+            else {self.size.cmp(&other.size)}
         }
     }
 
@@ -560,7 +563,7 @@ pub mod reaction_mixture {
             // sort the species set
             //a) make it contiguous
             let mut cloned_species = self.species_set.clone();
-            cloned_species.make_contiguous().sort();
+            cloned_species.make_contiguous().sort_by(|a, b| b.cmp(a));
             for this_species_ref in cloned_species {
                 let this_species = this_species_ref.borrow();
                 let size_annot: String = format!("init: 1 /*{} agents*/ ", this_species.size);
@@ -1284,8 +1287,6 @@ mod tests {
         let act_event_2 = my_mix.rule_activities.clone();
         
         my_mix.axn_axn_binary_bind(NodeIndex::from(1), NodeIndex::from(2));
-        let kappa_event_3 = my_mix.to_kappa();
-        let act_event_3 = my_mix.rule_activities.clone();
         
         my_mix.axn_axn_binary_unbind(Rc::new(RefCell::new(EdgeEnds{
             a: NodeIndex::new(1),
