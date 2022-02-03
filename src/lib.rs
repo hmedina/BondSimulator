@@ -680,11 +680,11 @@ pub mod reaction_mixture {
                 ap2_axn_b_free: MassActionTerm{mass: 0, rate: rule_rates.ap2_axn_b_free},
                 ap3_axn_b_free: MassActionTerm{mass: 0, rate: rule_rates.ap3_axn_b_free},
                 apc_apc_b_free: MassActionTerm{mass: 0, rate: rule_rates.apc_apc_b_free},
-                axn_axn_b_bind: MassActionTerm{mass: x_mass * (x_mass-1), rate: rule_rates.axn_axn_b_bind}, // all monomeric: everything that can happen is of binary binding type
-                ap1_axn_b_bind: MassActionTerm{mass: p_mass * x_mass, rate: rule_rates.ap1_axn_b_bind},
-                ap2_axn_b_bind: MassActionTerm{mass: p_mass * x_mass, rate: rule_rates.ap2_axn_b_bind},
+                axn_axn_b_bind: MassActionTerm{mass: if x_mass > 0 {x_mass * (x_mass-1)} else {0}, rate: rule_rates.axn_axn_b_bind},    // All monomeric: everything that can happen is of binary binding type;
+                ap1_axn_b_bind: MassActionTerm{mass: p_mass * x_mass, rate: rule_rates.ap1_axn_b_bind},                                 // the if/else special case guards against 0ed abundances underflowing
+                ap2_axn_b_bind: MassActionTerm{mass: p_mass * x_mass, rate: rule_rates.ap2_axn_b_bind},                                 // the usize tracker.
                 ap3_axn_b_bind: MassActionTerm{mass: p_mass * x_mass, rate: rule_rates.ap3_axn_b_bind},
-                apc_apc_b_bind: MassActionTerm{mass: p_mass * (p_mass-1), rate: rule_rates.apc_apc_b_bind}
+                apc_apc_b_bind: MassActionTerm{mass: if p_mass > 0 {p_mass * (p_mass-1)} else {0}, rate: rule_rates.apc_apc_b_bind}
             };
             // bringing it all together
             Mixture {universe_graph: net, species_annots: spc, ports: opr, edges: edg, rule_activities: rac, species_set: sps, unary_binding_pairs: uem, edge_index_map: eim}
@@ -831,6 +831,7 @@ pub mod reaction_mixture {
             self.species_annots.get(&host_index).unwrap().borrow_mut().edges.xh_xt.insert(Rc::clone(&new_edge));
             self.edges.xh_xt.insert(Rc::clone(&new_edge));
             // update species annotation tracker
+            self.species_set.make_contiguous().sort();
             let spec_ix: usize = self.species_set.binary_search(self.species_annots.get(&eaten_index).unwrap()).unwrap();
             self.species_set.remove(spec_ix);
             let indexes_of_eaten: BTreeSet<NodeIndex> = self.species_annots.get(&eaten_index).unwrap().borrow().agent_set.clone();
