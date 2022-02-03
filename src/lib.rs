@@ -408,17 +408,55 @@ pub mod rule_activities {
         }
     }
 
+    impl RuleActivities {
+        pub fn calculate_rule_activities(&self) -> Vec<f64>{
+            vec![
+                self.axn_axn_u_bind.calculate_activity(),
+                self.axn_axn_b_bind.calculate_activity(),
+                self.axn_axn_u_free.calculate_activity(),
+                self.axn_axn_b_free.calculate_activity(),
+                self.ap1_axn_u_bind.calculate_activity(),
+                self.ap1_axn_b_bind.calculate_activity(),
+                self.ap1_axn_u_free.calculate_activity(),
+                self.ap1_axn_b_free.calculate_activity(),
+                self.ap2_axn_u_bind.calculate_activity(),
+                self.ap2_axn_b_bind.calculate_activity(),
+                self.ap2_axn_u_free.calculate_activity(),
+                self.ap2_axn_b_free.calculate_activity(),
+                self.ap3_axn_u_bind.calculate_activity(),
+                self.ap3_axn_b_bind.calculate_activity(),
+                self.ap3_axn_u_free.calculate_activity(),
+                self.ap3_axn_b_free.calculate_activity(),
+                self.apc_apc_u_bind.calculate_activity(),
+                self.apc_apc_b_bind.calculate_activity(),
+                self.apc_apc_u_free.calculate_activity(),
+                self.apc_apc_b_free.calculate_activity()
+            ]
+        }
+
+        pub fn calculate_system_activity(&self) -> f64 {
+            self.calculate_rule_activities().iter().sum()
+        }
+    }
+
     #[derive(Clone, Debug, PartialEq)]
     pub struct MassActionTerm {
         pub mass: usize,
-        pub rate: f64
+        pub rate: f64,
     }
 
     impl fmt::Display for MassActionTerm {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            write!(f, "|{}| * {}", self.mass, self.rate)
+            write!(f, "|{}| * {} => {}", self.mass, self.rate, self.calculate_activity())
         }
     }
+
+    impl MassActionTerm {
+        pub fn calculate_activity(&self) -> f64 {
+            self.mass as f64 * self.rate
+        }
+    }
+
 
     pub struct RuleRates {
         pub axn_axn_u_bind: f64,
@@ -481,7 +519,7 @@ pub mod reaction_mixture {
     use crate::rule_activities::{RuleActivities, RuleRates, MassActionTerm};
     use crate::unary_embeds::UnaryEmbeds;
     use petgraph::{graph::Graph, algo::astar::astar, prelude::*, visit::Dfs};
-    use rand::prelude::*;
+    use rand::{distributions::WeightedIndex, prelude::*};
     use std::cell::{RefCell, RefMut};
     use std::cmp::Ordering;
     use std::collections::{VecDeque, BTreeMap, BTreeSet, HashSet};
@@ -492,7 +530,7 @@ pub mod reaction_mixture {
         ports: OpenPorts,
         edges: EdgeTypes,
         size: usize,
-        agent_set: BTreeSet<NodeIndex>
+        agent_set: BTreeSet<NodeIndex>,
     }
 
     impl Eq for MixtureSpecies {}
@@ -546,22 +584,58 @@ pub mod reaction_mixture {
         edges: EdgeTypes,
         edge_index_map: BTreeMap<EdgeIndex, Rc<RefCell<EdgeEnds>>>,         // used to update Z when removing bonds from the universe graph
         unary_binding_pairs: UnaryEmbeds,
-        pub rule_activities: RuleActivities
+        pub rule_activities: RuleActivities,
+        pub simulated_time: f64,
+        pub simulated_events: usize,
+        simulator_rng: ThreadRng
     }
     
     impl Mixture {
+        fn advance_simulation_metrics(&mut self) {
+            self.simulated_events += 1;
+            let tau: f64 = 1.0 / self.rule_activities.calculate_system_activity();
+            let rdy: f64 = (1.0 / self.simulator_rng.gen::<f64>()).ln();
+            self.simulated_time += tau * rdy;
+        }
+
+        fn choose_and_apply_next_rule(&mut self) {
+            let dist = WeightedIndex::new(self.rule_activities.calculate_rule_activities()).unwrap();
+            let chosen_rule: usize = dist.sample(&mut self.simulator_rng);
+            match chosen_rule {
+                0 => self.pick_targets_axn_axn_unary_bind(),
+                1 => self.pick_targets_axn_axn_binary_bind(),
+                2 => self.pick_targets_axn_axn_unary_unbind(),
+                3 => self.pick_targets_axn_axn_binary_unbind(),
+                _ => panic!("We are not here yet!")
+            }
+            self.advance_simulation_metrics();
+        }
+
+        fn pick_targets_axn_axn_unary_bind(&mut self) {
+            // pick a True from UnaryEmbeds.xh_xt
+        }
+
+        fn pick_targets_axn_axn_binary_bind(&mut self) {
+            // pick a ..? do I need a BinaryEmbeds.xh_xt?!
+        }
+
+        fn pick_targets_axn_axn_unary_unbind(&mut self) {
+            // pick one from self.edges.xh_xt where .z, from the universe graph, is True
+        }
+
+        fn pick_targets_axn_axn_binary_unbind(&mut self) {
+            // pick one from self.edges.xh_xt where .z, from the universe graph, is False
+        }
+
         /**
          * Yield a snapshot representation that can be printed or compared against others in a
          * kappa-aware way.
         */
         pub fn to_kappa(&self) -> String {
-            // printer
             let mut mixture_string: String = String::new();
-            mixture_string.push_str("# synthetic mixture\n\n");
-            let debug_str = format!("# mixture has {} nodes and {} edges\n", self.universe_graph.node_count(), self.universe_graph.edge_count());
-            mixture_string.push_str(&debug_str);
-            // sort the species set
-            //a) make it contiguous
+            mixture_string.push_str(&format!("// Snapshot [Event:{}]\n", self.simulated_events));
+            mixture_string.push_str(&format!("// Mixture has {} nodes and {} edges\n", self.universe_graph.node_count(), self.universe_graph.edge_count()));
+            mixture_string.push_str(&format!("%def: \"T0\" \"{}\"\n\n", self.simulated_time));
             let mut cloned_species = self.species_set.clone();
             cloned_species.make_contiguous().sort_by(|a, b| b.cmp(a));
             for this_species_ref in cloned_species {
@@ -687,7 +761,9 @@ pub mod reaction_mixture {
                 apc_apc_b_bind: MassActionTerm{mass: if p_mass > 0 {p_mass * (p_mass-1)} else {0}, rate: rule_rates.apc_apc_b_bind}
             };
             // bringing it all together
-            Mixture {universe_graph: net, species_annots: spc, ports: opr, edges: edg, rule_activities: rac, species_set: sps, unary_binding_pairs: uem, edge_index_map: eim}
+            Mixture {universe_graph: net, species_annots: spc, ports: opr, edges: edg, rule_activities: rac, 
+                species_set: sps, unary_binding_pairs: uem, edge_index_map: eim, 
+                simulated_events: 0, simulated_time: 0.0, simulator_rng: rand::thread_rng()}
         }
     
         pub fn axn_axn_unary_bind(&mut self, head_node: NodeIndex, tail_node: NodeIndex) {
@@ -1324,5 +1400,65 @@ mod tests {
 
         assert_eq!(kappa_event_0, kappa_event_6);
         assert_eq!(act_event_0, act_event_6);
+    }
+
+    fn two_cycles() {
+        let my_rates = RuleRates {
+            axn_axn_u_bind: 1.0,
+            axn_axn_b_bind: 1.0,
+            axn_axn_u_free: 1.0,
+            axn_axn_b_free: 1.0,
+            ap1_axn_u_bind: 0.0,
+            ap1_axn_b_bind: 0.0,
+            ap1_axn_u_free: 0.0,
+            ap1_axn_b_free: 0.0,
+            ap2_axn_u_bind: 0.0,
+            ap2_axn_b_bind: 0.0,
+            ap2_axn_u_free: 0.0,
+            ap2_axn_b_free: 0.0,
+            ap3_axn_u_bind: 0.0,
+            ap3_axn_b_bind: 0.0,
+            ap3_axn_u_free: 0.0,
+            ap3_axn_b_free: 0.0,
+            apc_apc_u_bind: 0.0,
+            apc_apc_b_bind: 0.0,
+            apc_apc_u_free: 0.0,
+            apc_apc_b_free: 0.0,
+        };
+        let mut my_mix = Mixture::new_from_monomers(5, 0, my_rates);
+        println!("{}", my_mix.to_kappa());
+    
+        my_mix.axn_axn_binary_bind(NodeIndex::from(0), NodeIndex::from(1));
+        println!("{}", my_mix.to_kappa());
+    
+        my_mix.axn_axn_binary_bind(NodeIndex::from(1), NodeIndex::from(2));
+        println!("{}", my_mix.to_kappa());
+            
+        my_mix.axn_axn_binary_bind(NodeIndex::from(3), NodeIndex::from(4));
+        println!("{}", my_mix.to_kappa());
+    
+        my_mix.axn_axn_unary_bind(NodeIndex::from(4), NodeIndex::from(3));
+        println!("{}", my_mix.to_kappa());
+    
+        my_mix.axn_axn_unary_bind(NodeIndex::from(2), NodeIndex::from(0));
+        println!("{}", my_mix.to_kappa());
+    
+        my_mix.axn_axn_unary_unbind(Rc::new(RefCell::new(EdgeEnds{
+            a: NodeIndex::new(1), b: NodeIndex::new(2), a_s: 'h', b_s: 't', z: EdgeIndex::new(1)
+        })));
+        println!("{}", my_mix.to_kappa());
+    
+        my_mix.axn_axn_unary_unbind(Rc::new(RefCell::new(EdgeEnds{
+            a: NodeIndex::new(3), b: NodeIndex::new(4), a_s: 'h', b_s: 't', z: EdgeIndex::new(2)
+        })));
+        println!("{}", my_mix.to_kappa());
+    
+        my_mix.axn_axn_binary_bind(NodeIndex::from(1), NodeIndex::from(4));
+        println!("{}", my_mix.to_kappa());
+    
+        my_mix.axn_axn_unary_bind(NodeIndex::from(3), NodeIndex::from(2));
+        println!("{}", my_mix.to_kappa());
+    
+        my_mix.print_rule_activities();
     }
 }
