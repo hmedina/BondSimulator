@@ -264,6 +264,7 @@ pub mod open_ports {
 
 pub mod edge_types {
     use std::collections::BTreeSet;
+    use std::fmt;
     use std::rc::Rc;
     use std::cell::RefCell;
     use petgraph::prelude::*;
@@ -371,6 +372,35 @@ pub mod edge_types {
                 p3_xp: BTreeSet::new(),
                 pp_pp: BTreeSet::new()
             }
+        }
+    }
+
+    impl fmt::Display for EdgeTypes {
+        fn fmt(&self, f:&mut fmt::Formatter<'_>) -> fmt::Result {
+            let mut str_rep: String = String::new();
+            let helper_closure = |input_set: &BTreeSet<Rc<RefCell<EdgeEnds>>>| -> String {
+                let mut temp_str = String::new();
+                for boxed_edge in input_set {
+                    let this_edge = boxed_edge.borrow();
+                    match this_edge.z {
+                        Some(i) => temp_str.push_str(&format!("\n\t({} -> {} | #{})", this_edge.a.index(), this_edge.b.index(), i.index())),
+                        None => temp_str.push_str(&format!("\n\t({} -> {})", this_edge.a.index(), this_edge.b.index())),                        
+                    }
+                    
+                }
+                temp_str
+            };
+            str_rep.push_str("xh_xt:");
+            str_rep.push_str(&helper_closure(&self.xh_xt));
+            str_rep.push_str("\np1_xp:");
+            str_rep.push_str(&helper_closure(&self.p1_xp));
+            str_rep.push_str("\np2_xp:");
+            str_rep.push_str(&helper_closure(&self.p2_xp));
+            str_rep.push_str("\np3_xp:");
+            str_rep.push_str(&helper_closure(&self.p3_xp));
+            str_rep.push_str("\npp_pp:");
+            str_rep.push_str(&helper_closure(&self.pp_pp));
+            write!(f, "{}\n", str_rep)
         }
     }
 }
@@ -519,13 +549,18 @@ pub mod possible_bond_embeds {
             let x_mass: u32 = axn_mass as u32;
             let p_mass: u32 = apc_mass as u32;
             let mut xh_xt = (0..x_mass).map(|x| NodeIndex::from(x)).cartesian_product((0..x_mass).map(|x| NodeIndex::from(x))).collect::<HashSet<(NodeIndex, NodeIndex)>>();
-            let p1_xp = (0..p_mass).map(|x| NodeIndex::from(x)).cartesian_product((0..x_mass).map(|x| NodeIndex::from(x))).collect::<HashSet<(NodeIndex, NodeIndex)>>();
-            let p2_xp = (0..p_mass).map(|x| NodeIndex::from(x)).cartesian_product((0..x_mass).map(|x| NodeIndex::from(x))).collect::<HashSet<(NodeIndex, NodeIndex)>>();
-            let p3_xp = (0..p_mass).map(|x| NodeIndex::from(x)).cartesian_product((0..x_mass).map(|x| NodeIndex::from(x))).collect::<HashSet<(NodeIndex, NodeIndex)>>();
-            let mut pp_pp = (0..p_mass).map(|x| NodeIndex::from(x)).cartesian_product((0..p_mass).map(|x| NodeIndex::from(x))).collect::<HashSet<(NodeIndex, NodeIndex)>>();
+            let p1_xp = (x_mass..(x_mass + p_mass)).map(|x| NodeIndex::from(x)).cartesian_product((0..x_mass).map(|x| NodeIndex::from(x))).collect::<HashSet<(NodeIndex, NodeIndex)>>();
+            let p2_xp = (x_mass..(x_mass + p_mass)).map(|x| NodeIndex::from(x)).cartesian_product((0..x_mass).map(|x| NodeIndex::from(x))).collect::<HashSet<(NodeIndex, NodeIndex)>>();
+            let p3_xp = (x_mass..(x_mass + p_mass)).map(|x| NodeIndex::from(x)).cartesian_product((0..x_mass).map(|x| NodeIndex::from(x))).collect::<HashSet<(NodeIndex, NodeIndex)>>();
+            let pp_pp_vect_combs = (x_mass..(x_mass + p_mass)).map(|x| NodeIndex::from(x)).combinations(2);
+            let mut pp_pp: HashSet<(NodeIndex, NodeIndex)> = HashSet::with_capacity(apc_mass * apc_mass / 2);
+            for mut elem in pp_pp_vect_combs {
+                let node_b: NodeIndex = elem.pop().unwrap();
+                let node_a: NodeIndex = elem.pop().unwrap();
+                pp_pp.insert((node_a, node_b));
+            }
             // cleanup of self-bonds
             for this_axn in 0..x_mass {xh_xt.remove(&(NodeIndex::from(this_axn), NodeIndex::from(this_axn)));}
-            for this_apc in 0..p_mass {pp_pp.remove(&(NodeIndex::from(this_apc), NodeIndex::from(this_apc)));}
             PossibleBondEmbeds {xh_xt, p1_xp, p2_xp, p3_xp, pp_pp}
         }
     }
@@ -564,7 +599,6 @@ pub mod reaction_mixture {
     use crate::agent_types::AgentType;
     use crate::rule_activities::{RuleActivities, RuleRates, MassActionTerm};
     use crate::possible_bond_embeds::PossibleBondEmbeds;
-    use itertools::Itertools;
     use petgraph::{graph::Graph, algo::astar::astar, prelude::*, visit::Dfs};
     use rand::{distributions::WeightedIndex, prelude::*};
     use std::cell::{RefCell, RefMut};
@@ -845,7 +879,7 @@ pub mod reaction_mixture {
         pub fn axn_axn_unary_bind(&mut self, head_node: NodeIndex, tail_node: NodeIndex) {
             // sanity check for unary-ness
             assert_eq!(self.species_annots.get(&head_node), self.species_annots.get(&tail_node), "This head and tail nodes do not already belong to the same species; can't unary bind them!");
-                {
+            {
                 let mut target_species: RefMut<MixtureSpecies> = self.species_annots.get(&head_node).unwrap().borrow_mut();
                 // create edge & update caches
                 let new_edge_index = self.universe_graph.add_edge(head_node, tail_node, true);
@@ -869,6 +903,33 @@ pub mod reaction_mixture {
                 target_species.edges.xh_xt.insert(Rc::clone(&new_edge));
                 self.edge_index_map.insert(new_edge_index, Rc::clone(&new_edge));
                 assert!(self.cycle_edges.xh_xt.insert(Rc::clone(&new_edge)));
+                // bindings no longer possible due to occupied sites
+                let mut binary_combinatorics_lost: HashSet<(NodeIndex, NodeIndex)> = HashSet::new();
+                for tail in &self.ports.xt_free.difference(&target_species.ports.xt_free).cloned().collect::<Vec<NodeIndex>>() {
+                    match self.binary_binding_pairs.xh_xt.take(&(head_node, *tail)) {
+                        Some((a_head, a_tail)) => {assert!(binary_combinatorics_lost.insert((a_head, a_tail)), "This lost pair already cached into the binary lost tracker!")}
+                        None => ()
+                    }
+                }
+                for head in &self.ports.xh_free.difference(&target_species.ports.xh_free).cloned().collect::<Vec<NodeIndex>>() {
+                    match self.binary_binding_pairs.xh_xt.take(&(*head, tail_node)) {
+                        Some((a_head, a_tail)) => {assert!(binary_combinatorics_lost.insert((a_head, a_tail)), "This lost pair already cached into the binary lost racker!")},
+                        None => ()
+                    }
+                }
+                let mut unary_combinatorics_lost: HashSet<(NodeIndex, NodeIndex)> = HashSet::new();
+                for tail in &target_species.ports.xt_free {
+                    match self.unary_binding_pairs.xh_xt.take(&(head_node, *tail)) {
+                        Some((a_head, a_tail)) => {assert!(unary_combinatorics_lost.insert((a_head, a_tail)), "This lost pair already cached into the unary lost tracker!")},
+                        None => ()
+                    }
+                }
+                for head in &target_species.ports.xh_free {
+                    match self.unary_binding_pairs.xh_xt.take(&(*head, tail_node)) {
+                        Some((a_head, a_tail)) => {assert!(unary_combinatorics_lost.insert((a_head, a_tail)), "This lost pair already cached into the unary los tracker!")},
+                        None => ()
+                    }
+                }
                 assert!(self.ports.xh_free.remove(&head_node));
                 assert!(self.ports.xt_free.remove(&tail_node));
                 assert!(target_species.ports.xh_free.remove(&head_node));
@@ -912,33 +973,6 @@ pub mod reaction_mixture {
                 self.tree_edges.p2_xp = tree_edges_retained_p2_xp;
                 self.tree_edges.p3_xp = tree_edges_retained_p3_xp;
                 self.tree_edges.pp_pp = tree_edges_retained_pp_pp;
-                // bindings no longer possible due to occupied sites
-                let mut binary_combinatorics_lost: HashSet<(NodeIndex, NodeIndex)> = HashSet::new();
-                for tail in &self.ports.xt_free.difference(&target_species.ports.xt_free).cloned().collect::<Vec<NodeIndex>>() {
-                    match self.binary_binding_pairs.xh_xt.take(&(head_node, *tail)) {
-                        Some((a_head, a_tail)) => {assert!(binary_combinatorics_lost.insert((a_head, a_tail)), "This lost pair already cached into the binary lost tracker!")}
-                        None => ()
-                    }
-                }
-                for head in &self.ports.xh_free.difference(&target_species.ports.xh_free).cloned().collect::<Vec<NodeIndex>>() {
-                    match self.binary_binding_pairs.xh_xt.take(&(*head, tail_node)) {
-                        Some((a_head, a_tail)) => {assert!(binary_combinatorics_lost.insert((a_head, a_tail)), "This lost pair already cached into the binary lost racker!")},
-                        None => ()
-                    }
-                }
-                let mut unary_combinatorics_lost: HashSet<(NodeIndex, NodeIndex)> = HashSet::new();
-                for tail in &target_species.ports.xt_free {
-                    match self.unary_binding_pairs.xh_xt.take(&(head_node, *tail)) {
-                        Some((a_head, a_tail)) => {assert!(unary_combinatorics_lost.insert((a_head, a_tail)), "This lost pair already cached into the unary lost tracker!")},
-                        None => ()
-                    }
-                }
-                for head in &target_species.ports.xh_free {
-                    match self.unary_binding_pairs.xh_xt.take(&(*head, tail_node)) {
-                        Some((a_head, a_tail)) => {assert!(unary_combinatorics_lost.insert((a_head, a_tail)), "This lost pair already cached into the unary los tracker!")},
-                        None => ()
-                    }
-                }
             }
             self.update_mass_actions();
         }
@@ -947,6 +981,33 @@ pub mod reaction_mixture {
             // sanity check for binary-ness
             assert_ne!(self.species_annots.get(&head_node), self.species_annots.get(&tail_node), "This head and tail nodes already belong to the same species; can't binary bind them!");
             let (host_index, eaten_index) = if self.species_annots.get(&head_node).unwrap().borrow().size >= self.species_annots.get(&tail_node).unwrap().borrow().size {(head_node, tail_node)} else {(tail_node, head_node)};
+            // bindings no longer possible due to occupied sites
+            let mut unary_combinatorics_lost: HashSet<(NodeIndex, NodeIndex)> = HashSet::with_capacity(self.species_annots.get(&head_node).unwrap().borrow().ports.xt_free.len() + self.species_annots.get(&tail_node).unwrap().borrow().ports.xh_free.len());
+            for tail in &self.species_annots.get(&head_node).unwrap().borrow().ports.xt_free {
+                match self.unary_binding_pairs.xh_xt.take(&(head_node, *tail)) {
+                    Some((a_head, a_tail)) => {assert!(unary_combinatorics_lost.insert((a_head, a_tail)), "This lost pair already cached into the unary lost tracker!")},
+                    None => ()
+                }
+            }
+            for head in &self.species_annots.get(&tail_node).unwrap().borrow().ports.xh_free {
+                match self.unary_binding_pairs.xh_xt.take(&(*head, tail_node)) {
+                    Some((a_head, a_tail)) => {assert!(unary_combinatorics_lost.insert((a_head, a_tail)), "This lost pair already ached into the unary lost tracker!")},
+                    None => ()
+                }
+            }
+            let mut binary_combinatorics_lost: HashSet<(NodeIndex, NodeIndex)> = HashSet::new();
+            for tail in &self.ports.xt_free.difference(&self.species_annots.get(&head_node).unwrap().borrow().ports.xt_free).cloned().collect::<Vec<NodeIndex>>() {
+                match self.binary_binding_pairs.xh_xt.take(&(head_node, *tail)) {
+                    Some((a_head, a_tail)) => {assert!(binary_combinatorics_lost.insert((a_head, a_tail)), "This lost pair already cached into the binary lost tracker!")},
+                    None => ()
+                }
+            }
+            for head in &self.ports.xh_free.difference(&self.species_annots.get(&head_node).unwrap().borrow().ports.xh_free).cloned().collect::<Vec<NodeIndex>>() {
+                match self.binary_binding_pairs.xh_xt.take(&(*head, tail_node)) {
+                    Some((a_head, a_tail)) => {assert!(binary_combinatorics_lost.insert((a_head, a_tail)), "This lost pair already cached into the binary lost tracker!")},
+                    None => ()
+                }
+            }
             assert!(self.species_annots.get(&head_node).unwrap().borrow_mut().ports.xh_free.remove(&head_node), "This head node was not listed as free in-species already, can't bind to it!");
             assert!(self.species_annots.get(&tail_node).unwrap().borrow_mut().ports.xt_free.remove(&tail_node), "This tail node was not listed as free in-species already, can't bind to it!");
             assert!(self.ports.xh_free.remove(&head_node), "This head node was not globally listed as free already, can't bind to it!");
@@ -992,33 +1053,6 @@ pub mod reaction_mixture {
                     }
                 }
             }
-            // bindings no longer possible due to occupied sites
-            let mut unary_combinatorics_lost: HashSet<(NodeIndex, NodeIndex)> = HashSet::with_capacity(self.species_annots.get(&head_node).unwrap().borrow().ports.xt_free.len() + self.species_annots.get(&tail_node).unwrap().borrow().ports.xh_free.len());
-            for tail in &self.species_annots.get(&head_node).unwrap().borrow().ports.xt_free {
-                match self.unary_binding_pairs.xh_xt.take(&(head_node, *tail)) {
-                    Some((a_head, a_tail)) => {assert!(unary_combinatorics_lost.insert((a_head, a_tail)), "This lost pair already cached into the unary lost tracker!")},
-                    None => ()
-                }
-            }
-            for head in &self.species_annots.get(&tail_node).unwrap().borrow().ports.xh_free {
-                match self.unary_binding_pairs.xh_xt.take(&(*head, tail_node)) {
-                    Some((a_head, a_tail)) => {assert!(unary_combinatorics_lost.insert((a_head, a_tail)), "This lost pair already ached into the unary lost tracker!")},
-                    None => ()
-                }
-            }
-            let mut binary_combinatorics_lost: HashSet<(NodeIndex, NodeIndex)> = HashSet::new();
-            for tail in &self.ports.xt_free.difference(&self.species_annots.get(&head_node).unwrap().borrow().ports.xt_free).cloned().collect::<Vec<NodeIndex>>() {
-                match self.binary_binding_pairs.xh_xt.take(&(head_node, *tail)) {
-                    Some((a_head, a_tail)) => {assert!(binary_combinatorics_lost.insert((a_head, a_tail)), "This lost pair already cached into the binary lost tracker!")},
-                    None => ()
-                }
-            }
-            for head in &self.ports.xh_free.difference(&self.species_annots.get(&head_node).unwrap().borrow().ports.xh_free).cloned().collect::<Vec<NodeIndex>>() {
-                match self.binary_binding_pairs.xh_xt.take(&(*head, tail_node)) {
-                    Some((a_head, a_tail)) => {assert!(binary_combinatorics_lost.insert((a_head, a_tail)), "This lost pair already cached into the binary lost tracker!")},
-                    None => ()
-                }
-            }
             self.species_annots.get(&host_index).unwrap().borrow_mut().ports.update_from(&self.species_annots.get(&eaten_index).unwrap().borrow().ports);
             self.species_annots.get(&host_index).unwrap().borrow_mut().edges.update_from(&self.species_annots.get(&eaten_index).unwrap().borrow().edges);
             self.species_annots.get(&host_index).unwrap().borrow_mut().size += self.species_annots.get(&eaten_index).unwrap().borrow().size;
@@ -1059,6 +1093,10 @@ pub mod reaction_mixture {
         }
 
         pub fn axn_axn_unary_unbind(&mut self, target_edge: Rc<RefCell<EdgeEnds>>) {
+            println!("Before rule application, unary binds\n{}", self.unary_binding_pairs);
+            println!("Before rule application, binary binds\n{}", self.binary_binding_pairs);
+            println!("Before rule application, cycle edges\n{}", self.cycle_edges);
+            println!("Before rule application, tree edges\n{}", self.tree_edges);
             if let EdgeEnds{a: head_node, b: tail_node, z: Some(edge_index)} = *target_edge.borrow() { 
                 // sanity check for reslient bond
                 assert!(self.universe_graph.edge_weight(edge_index).unwrap(), "This bond is not flagged as resilient! Breaking it would not yield a still-connected component.");
@@ -1126,6 +1164,16 @@ pub mod reaction_mixture {
                 assert!(self.ports.xt_free.insert(tail_node), "This Axn tail was already listed as free prior to this unbinding!");
                 assert!(target_species.ports.xh_free.insert(head_node), "This Axn head was already listed as free prior to this unbinding!");
                 assert!(target_species.ports.xt_free.insert(tail_node), "This Axn tail was already listed as free prior to this unbinding!");
+                // bindings now possible due to free'd sites
+                for tail in &self.ports.xt_free.difference(&target_species.ports.xt_free).cloned().collect::<Vec<NodeIndex>>() {
+                    assert!(self.binary_binding_pairs.xh_xt.insert((head_node, *tail)), "This gained pair already cached into the binary tracker!")}
+                for head in &self.ports.xh_free.difference(&target_species.ports.xh_free).cloned().collect::<Vec<NodeIndex>>() {
+                    assert!(self.binary_binding_pairs.xh_xt.insert((*head, tail_node)), "This gained pair already cached into the binary tracker!")}
+                for tail in &target_species.ports.xt_free {
+                    assert!(self.unary_binding_pairs.xh_xt.insert((head_node, *tail)), "This gained pair already cached into the unary tracker!")}
+                self.unary_binding_pairs.xh_xt.remove(&(head_node, tail_node));     // hack to remove pair that will be visited from the other side in the next loop
+                for head in &target_species.ports.xh_free {
+                    assert!(self.unary_binding_pairs.xh_xt.insert((*head, tail_node)), "This gained pair already cached into the unary tracker!")}
                 // helper closure for bond resilience updates
                 let mut resilience_iterate_typed = |edge_iter: &BTreeSet<std::rc::Rc<std::cell::RefCell<EdgeEnds>>>| -> BTreeSet<Rc<RefCell<EdgeEnds>>> {
                     let mut bonds_decyclized: BTreeSet<Rc<RefCell<EdgeEnds>>> = BTreeSet::new();
@@ -1165,20 +1213,19 @@ pub mod reaction_mixture {
                 self.cycle_edges.p2_xp = cycle_edges_retained_p2_xp;
                 self.cycle_edges.p3_xp = cycle_edges_retained_p3_xp;
                 self.cycle_edges.pp_pp = cycle_edges_retained_pp_pp;
-                // bindings now possible due to free'd sites
-                for tail in &self.ports.xt_free.difference(&target_species.ports.xt_free).cloned().collect::<Vec<NodeIndex>>() {
-                    assert!(self.binary_binding_pairs.xh_xt.insert((head_node, *tail)), "This gained pair already cached into the binary tracker")}
-                for head in &self.ports.xh_free.difference(&target_species.ports.xh_free).cloned().collect::<Vec<NodeIndex>>() {
-                    assert!(self.binary_binding_pairs.xh_xt.insert((*head, tail_node)), "This gained pair already cached into the binary tracker")}
-                for tail in &target_species.ports.xt_free {
-                    assert!(self.unary_binding_pairs.xh_xt.insert((head_node, *tail)), "This gained pair already cached into the unary tracker")}
-                for head in &target_species.ports.xh_free {
-                    assert!(self.unary_binding_pairs.xh_xt.insert((*head, tail_node)), "This gained pair already cached into the unary tracker")}
             } else {panic!("This edge did not have a bond index!")}
             self.update_mass_actions();
+            println!("After rule application, unary binds\n{}", self.unary_binding_pairs);
+            println!("After rule application, binary binds\n{}", self.binary_binding_pairs);
+            println!("After rule application, cycle edges\n{}", self.cycle_edges);
+            println!("After rule application, tree edges\n{}", self.tree_edges);
         }
 
         pub fn axn_axn_binary_unbind(&mut self, target_edge: Rc<RefCell<EdgeEnds>>) {
+            println!("Before rule application, unary binds\n{}", self.unary_binding_pairs);
+            println!("Before rule application, binary binds\n{}", self.binary_binding_pairs);
+            println!("Before rule application, cycle edges\n{}", self.cycle_edges);
+            println!("Before rule application, tree edges\n{}", self.tree_edges);
             if let EdgeEnds{a: head_node, b: tail_node, z: Some(edge_index)} = *target_edge.borrow() {
                 // sanity check for non-reslient bond
                 assert!(! self.universe_graph.edge_weight(edge_index).unwrap(), "This bond is flagged as resilient! Breaking it would yield a still-connected component.");
@@ -1291,16 +1338,12 @@ pub mod reaction_mixture {
                 }
                 // update the species set, open port trackers, global edge tracker
                 self.species_set.push_back(Rc::clone(&new_species));
-                assert!(self.ports.xh_free.insert(head_node), "This Axn head was already listed as free prior to this unbinding!");
-                assert!(self.ports.xt_free.insert(tail_node), "This Axn tail was already listed as free prior to this unbinding!");
-                assert!(self.species_annots.get(&head_node).unwrap().borrow_mut().ports.xh_free.insert(head_node), "This Axn head was already listed as free prior to this unbinding!");
-                assert!(self.species_annots.get(&tail_node).unwrap().borrow_mut().ports.xt_free.insert(tail_node), "This Axn tail was already listed as free prior to this unbinding!");
                 // binding opportunities that were unary, but will now be binary
                 for free_head in self.species_annots.get(&retained_mark).unwrap().borrow().ports.xh_free.union(&self.species_annots.get(&ejected_mark).unwrap().borrow().ports.xh_free).into_iter() {
                     for free_tail in self.species_annots.get(&ejected_mark).unwrap().borrow().ports.xt_free.union(&self.species_annots.get(&retained_mark).unwrap().borrow().ports.xt_free).into_iter() {
                         match self.unary_binding_pairs.xh_xt.take(&(*free_head, *free_tail)) {
                             Some((a_head, a_tail)) => {assert!(self.binary_binding_pairs.xh_xt.insert((a_head, a_tail)), "This pair already cached as binary!")},
-                            None => panic!("This pair should have been cached as unary, but was not!")
+                            None => ()
                         }
                     }
                 }
@@ -1308,7 +1351,7 @@ pub mod reaction_mixture {
                     for free_tail in self.species_annots.get(&ejected_mark).unwrap().borrow().ports.xp_free.union(&self.species_annots.get(&retained_mark).unwrap().borrow().ports.xp_free).into_iter() {
                         match self.unary_binding_pairs.p1_xp.take(&(*free_head, *free_tail)) {
                             Some((a_head, a_tail)) => {assert!(self.binary_binding_pairs.p1_xp.insert((a_head, a_tail)), "This pair already cached as binary!")},
-                            None => panic!("This pair should have been cached as unary, but was not!")
+                            None => ()
                         }
                     }
                 }
@@ -1316,7 +1359,7 @@ pub mod reaction_mixture {
                     for free_tail in self.species_annots.get(&ejected_mark).unwrap().borrow().ports.xp_free.union(&self.species_annots.get(&retained_mark).unwrap().borrow().ports.xp_free).into_iter() {
                         match self.unary_binding_pairs.p2_xp.take(&(*free_head, *free_tail)) {
                             Some((a_head, a_tail)) => {assert!(self.binary_binding_pairs.p2_xp.insert((a_head, a_tail)), "This pair already cached as binary!")},
-                            None => panic!("This pair should have been cached as unary, but was not!")
+                            None => ()
                         }
                     }
                 }
@@ -1324,7 +1367,7 @@ pub mod reaction_mixture {
                     for free_tail in self.species_annots.get(&ejected_mark).unwrap().borrow().ports.xp_free.union(&self.species_annots.get(&retained_mark).unwrap().borrow().ports.xp_free).into_iter() {
                         match self.unary_binding_pairs.p3_xp.take(&(*free_head, *free_tail)) {
                             Some((a_head, a_tail)) => {assert!(self.binary_binding_pairs.p3_xp.insert((a_head, a_tail)), "This pair already cached as binary!")},
-                            None => panic!("This pair should have been cached as unary, but was not!")
+                            None => ()
                         }
                     }
                 }
@@ -1332,23 +1375,37 @@ pub mod reaction_mixture {
                     for free_tail in &self.species_annots.get(&ejected_mark).unwrap().borrow().ports.pp_free {
                         match self.unary_binding_pairs.pp_pp.take(&(*free_head, *free_tail)) {
                             Some((a_head, a_tail)) => {assert!(self.binary_binding_pairs.pp_pp.insert((a_head, a_tail)), "This pair already cached as binary!")},
-                            None => panic!("This pair should have been cached as unary, but was not!")
+                            None => ()
                         }
                     }
                 }
+                assert!(self.ports.xh_free.insert(head_node), "This Axn head was already listed as free prior to this unbinding!");
+                assert!(self.ports.xt_free.insert(tail_node), "This Axn tail was already listed as free prior to this unbinding!");
+                assert!(self.species_annots.get(&head_node).unwrap().borrow_mut().ports.xh_free.insert(head_node), "This Axn head was already listed as free prior to this unbinding!");
+                assert!(self.species_annots.get(&tail_node).unwrap().borrow_mut().ports.xt_free.insert(tail_node), "This Axn tail was already listed as free prior to this unbinding!");
                 // bindings now possible due to the free'd sites
-                for tail in &self.ports.xt_free.difference(&self.species_annots.get(&tail_node).unwrap().borrow().ports.xt_free).cloned().collect::<Vec<NodeIndex>>() {
-                    assert!(self.binary_binding_pairs.xh_xt.insert((head_node, *tail)), "This gained pair already cached into the binary tracker")}
-                for head in &self.ports.xh_free.difference(&self.species_annots.get(&head_node).unwrap().borrow().ports.xh_free).cloned().collect::<Vec<NodeIndex>>() {
-                    assert!(self.binary_binding_pairs.xh_xt.insert((*head, tail_node)), "This gained pair already cached into the binary tracker")}
                 for tail in &self.species_annots.get(&head_node).unwrap().borrow().ports.xt_free {
                     assert!(self.unary_binding_pairs.xh_xt.insert((head_node, *tail)), "This gained pair already cached into the unary tracker")}
                 for head in &self.species_annots.get(&tail_node).unwrap().borrow().ports.xh_free {
                     assert!(self.unary_binding_pairs.xh_xt.insert((*head, tail_node)), "This gained pair already cached into the unary tracker")}
+                for tail in &self.ports.xt_free.difference(&self.species_annots.get(&head_node).unwrap().borrow().ports.xt_free).cloned().collect::<Vec<NodeIndex>>() {
+                    assert!(self.binary_binding_pairs.xh_xt.insert((head_node, *tail)), "This gained pair already cached into the binary tracker")}
+                self.binary_binding_pairs.xh_xt.remove(&(head_node, tail_node));    // hack to remove pair that will be visited from the other side in the next loop
+                for head in &self.ports.xh_free.difference(&self.species_annots.get(&tail_node).unwrap().borrow().ports.xh_free).cloned().collect::<Vec<NodeIndex>>() {
+                    assert!(self.binary_binding_pairs.xh_xt.insert((*head, tail_node)), "This gained pair already cached into the binary tracker")}
+                // self-edge cleanup
+                self.binary_binding_pairs.xh_xt.remove(&(head_node, head_node));
+                self.binary_binding_pairs.xh_xt.remove(&(tail_node, tail_node));
+                self.unary_binding_pairs.xh_xt.remove(&(head_node, head_node));
+                self.unary_binding_pairs.xh_xt.remove(&(tail_node, tail_node));
             } else {panic!("This edge did not have a bond index!")}
             self.update_mass_actions();
+            println!("After rule application, unary binds\n{}", self.unary_binding_pairs);
+            println!("After rule application, binary binds\n{}", self.binary_binding_pairs);
+            println!("After rule application, cycle edges\n{}", self.cycle_edges);
+            println!("After rule application, tree edges\n{}", self.tree_edges);
         }
-        
+
         pub fn print_rule_activities(&self) {
             println!("{}", self.rule_activities)
         }
