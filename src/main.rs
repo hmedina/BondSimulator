@@ -1,16 +1,12 @@
 use axin_apc_simulator::{rule_activities::RuleRates, reaction_mixture::Mixture};
-use petgraph::prelude::*;
-use std::rc::Rc;
-use std::cell::RefCell;
-use axin_apc_simulator::edge_ends::EdgeEnds;
 
 
 fn main() {
     let my_rates = RuleRates {
-        axn_axn_u_bind: 1.0,
-        axn_axn_b_bind: 1.0,
-        axn_axn_u_free: 1.0,
-        axn_axn_b_free: 1.0,
+        axn_axn_u_bind: 1.0e-2,
+        axn_axn_b_bind: 1.0e-4,
+        axn_axn_u_free: 1.0e-2,
+        axn_axn_b_free: 1.0e-2,
         ap1_axn_u_bind: 0.0,
         ap1_axn_b_bind: 0.0,
         ap1_axn_u_free: 0.0,
@@ -28,39 +24,9 @@ fn main() {
         apc_apc_u_free: 0.0,
         apc_apc_b_free: 0.0,
     };
-    let mut my_mix = Mixture::new_from_monomers(5, 0, my_rates);
+    let mut my_mix = Mixture::new_from_monomers(1000, 0, my_rates);
+    for _ in 0..1000 {
+        my_mix.choose_and_apply_next_rule();
+    }
     println!("{}", my_mix.to_kappa());
-
-    my_mix.axn_axn_binary_bind(NodeIndex::from(0), NodeIndex::from(1));
-    println!("{}", my_mix.to_kappa());
-
-    my_mix.axn_axn_binary_bind(NodeIndex::from(1), NodeIndex::from(2));
-    println!("{}", my_mix.to_kappa());
-        
-    my_mix.axn_axn_binary_bind(NodeIndex::from(3), NodeIndex::from(4));
-    println!("{}", my_mix.to_kappa());
-
-    my_mix.print_rule_activities();
-
-    //my_mix.axn_axn_unary_bind(NodeIndex::from(4), NodeIndex::from(3));
-    //println!("{}", my_mix.to_kappa());
-//
-    //my_mix.axn_axn_unary_bind(NodeIndex::from(2), NodeIndex::from(0));
-    //println!("{}", my_mix.to_kappa());
-//
-    //my_mix.axn_axn_unary_unbind(Rc::new(RefCell::new(EdgeEnds{
-    //    a: NodeIndex::new(1), b: NodeIndex::new(2), z: Some(EdgeIndex::new(1))})));
-    //println!("{}", my_mix.to_kappa());
-//
-    //my_mix.axn_axn_unary_unbind(Rc::new(RefCell::new(EdgeEnds{
-    //    a: NodeIndex::new(3), b: NodeIndex::new(4), z: Some(EdgeIndex::new(2))})));
-    //println!("{}", my_mix.to_kappa());
-//
-    //my_mix.axn_axn_binary_bind(NodeIndex::from(1), NodeIndex::from(4));
-    //println!("{}", my_mix.to_kappa());
-//
-    //my_mix.axn_axn_unary_bind(NodeIndex::from(3), NodeIndex::from(2));
-    //println!("{}", my_mix.to_kappa());
-//
-    //my_mix.print_rule_activities();
 }

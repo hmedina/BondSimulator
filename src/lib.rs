@@ -53,6 +53,7 @@ pub mod agent_types {
 }
 
 pub mod edge_ends {
+    use std::fmt;
     use std::cmp::Ordering;
     use petgraph::prelude::*;
 
@@ -87,6 +88,16 @@ pub mod edge_ends {
         fn cmp(&self, other: &Self) -> Ordering {
             if self.a == other.a { self.b.cmp(&other.b) }
             else {self.a.cmp(&other.a)}
+        }
+    }
+
+    impl fmt::Display for EdgeEnds {
+        fn fmt(&self, f:&mut fmt::Formatter<'_>) -> fmt::Result {
+            let str_rep = match self.z {
+                Some(i) => format!("#{} @ {} -> {}", i.index(), self.a.index(), self.b.index()),
+                None => format!("{} -> {}", self.a.index(), self.b.index())
+            };
+            write!(f, "{}", str_rep)
         }
     }
 }
@@ -270,7 +281,7 @@ pub mod edge_types {
     use petgraph::prelude::*;
     use crate::edge_ends::EdgeEnds;
 
-    #[derive(Debug)]
+    #[derive(Clone, Debug, PartialEq)]
     /** 
      * Structure of BTreeSets, one per bond type, holding <Rc<RefCell<EdgeEnds>>>.
      */
@@ -381,12 +392,7 @@ pub mod edge_types {
             let helper_closure = |input_set: &BTreeSet<Rc<RefCell<EdgeEnds>>>| -> String {
                 let mut temp_str = String::new();
                 for boxed_edge in input_set {
-                    let this_edge = boxed_edge.borrow();
-                    match this_edge.z {
-                        Some(i) => temp_str.push_str(&format!("\n\t({} -> {} | #{})", this_edge.a.index(), this_edge.b.index(), i.index())),
-                        None => temp_str.push_str(&format!("\n\t({} -> {})", this_edge.a.index(), this_edge.b.index())),                        
-                    }
-                    
+                    temp_str.push_str(&format!("\n\t{}", boxed_edge.borrow()))
                 }
                 temp_str
             };
@@ -517,7 +523,7 @@ pub mod possible_bond_embeds {
     use std::{fmt, collections::HashSet};
     use petgraph::prelude::NodeIndex;
 
-    #[derive(Debug)]
+    #[derive(Clone, Debug, PartialEq)]
     /** 
      * Structure of hashsets, one per bond type. The value contained in them is a tuple of 
      * NodeIndexes, specifying the oriented bond's origin & destination. These are pairs
@@ -667,7 +673,7 @@ pub mod reaction_mixture {
         edge_index_map: BTreeMap<EdgeIndex, Rc<RefCell<EdgeEnds>>>,         // used to update Z when removing bonds from the universe graph
         unary_binding_pairs: PossibleBondEmbeds,
         binary_binding_pairs: PossibleBondEmbeds,
-        pub rule_activities: RuleActivities,
+        rule_activities: RuleActivities,
         pub simulated_time: f64,
         pub simulated_events: usize,
         simulator_rng: ThreadRng
@@ -707,7 +713,7 @@ pub mod reaction_mixture {
             self.rule_activities.apc_apc_u_bind.mass = self.unary_binding_pairs.pp_pp.len();
         }
 
-        fn choose_and_apply_next_rule(&mut self) {
+        pub fn choose_and_apply_next_rule(&mut self) {
             let dist = WeightedIndex::new(self.rule_activities.calculate_rule_activities()).unwrap();
             let chosen_rule: usize = dist.sample(&mut self.simulator_rng);
             match chosen_rule {
@@ -721,19 +727,27 @@ pub mod reaction_mixture {
         }
 
         fn pick_targets_axn_axn_unary_bind(&mut self) {
-            // pick a True from UnaryEmbeds.xh_xt
+            let (target_a, target_b): (NodeIndex, NodeIndex) = self.unary_binding_pairs.xh_xt.iter().choose(&mut self.simulator_rng).unwrap().clone();
+            //println!("Applying Axn-Axn Unary Bind to {} and {}", target_a.index(), target_b.index());
+            self.axn_axn_unary_bind(target_a, target_b);
         }
 
         fn pick_targets_axn_axn_binary_bind(&mut self) {
-            // pick a ..? do I need a BinaryEmbeds.xh_xt?!
+            let (target_a, target_b): (NodeIndex, NodeIndex) = self.binary_binding_pairs.xh_xt.iter().choose(&mut self.simulator_rng).unwrap().clone();
+            //println!("Applying Axn-Axn Binary Bind to {} and {}", target_a.index(), target_b.index());
+            self.axn_axn_binary_bind(target_a, target_b);
         }
 
         fn pick_targets_axn_axn_unary_unbind(&mut self) {
-            // pick one from self.edges.xh_xt where .z, from the universe graph, is True
+            let target_edge: Rc<RefCell<EdgeEnds>> = self.cycle_edges.xh_xt.iter().choose(&mut self.simulator_rng).unwrap().clone();
+            //println!("Applying Axn-Axn Unary Unbind to {}", target_edge.borrow());
+            self.axn_axn_unary_unbind(target_edge);
         }
 
         fn pick_targets_axn_axn_binary_unbind(&mut self) {
-            // pick one from self.edges.xh_xt where .z, from the universe graph, is False
+            let target_edge: Rc<RefCell<EdgeEnds>> = self.tree_edges.xh_xt.iter().choose(&mut self.simulator_rng).unwrap().clone();
+            //println!("Applying Axn-Axn Binary Unbind to {}", target_edge.borrow());
+            self.axn_axn_binary_unbind(target_edge);
         }
 
         /**
@@ -878,7 +892,7 @@ pub mod reaction_mixture {
     
         pub fn axn_axn_unary_bind(&mut self, head_node: NodeIndex, tail_node: NodeIndex) {
             // sanity check for unary-ness
-            assert_eq!(self.species_annots.get(&head_node), self.species_annots.get(&tail_node), "This head and tail nodes do not already belong to the same species; can't unary bind them!");
+            assert_eq!(self.species_annots.get(&head_node), self.species_annots.get(&tail_node), "This head and tail nodes ({}, {}) do not already belong to the same species; can't unary bind them!", head_node.index(), tail_node.index());
             {
                 let mut target_species: RefMut<MixtureSpecies> = self.species_annots.get(&head_node).unwrap().borrow_mut();
                 // create edge & update caches
@@ -979,7 +993,7 @@ pub mod reaction_mixture {
     
         pub fn axn_axn_binary_bind(&mut self, head_node: NodeIndex, tail_node: NodeIndex) {
             // sanity check for binary-ness
-            assert_ne!(self.species_annots.get(&head_node), self.species_annots.get(&tail_node), "This head and tail nodes already belong to the same species; can't binary bind them!");
+            assert_ne!(self.species_annots.get(&head_node), self.species_annots.get(&tail_node), "This head and tail nodes ({}, {}) already belong to the same species; can't binary bind them!", head_node.index(), tail_node.index());
             let (host_index, eaten_index) = if self.species_annots.get(&head_node).unwrap().borrow().size >= self.species_annots.get(&tail_node).unwrap().borrow().size {(head_node, tail_node)} else {(tail_node, head_node)};
             // bindings no longer possible due to occupied sites
             let mut unary_combinatorics_lost: HashSet<(NodeIndex, NodeIndex)> = HashSet::with_capacity(self.species_annots.get(&head_node).unwrap().borrow().ports.xt_free.len() + self.species_annots.get(&tail_node).unwrap().borrow().ports.xh_free.len());
@@ -1093,13 +1107,9 @@ pub mod reaction_mixture {
         }
 
         pub fn axn_axn_unary_unbind(&mut self, target_edge: Rc<RefCell<EdgeEnds>>) {
-            println!("Before rule application, unary binds\n{}", self.unary_binding_pairs);
-            println!("Before rule application, binary binds\n{}", self.binary_binding_pairs);
-            println!("Before rule application, cycle edges\n{}", self.cycle_edges);
-            println!("Before rule application, tree edges\n{}", self.tree_edges);
             if let EdgeEnds{a: head_node, b: tail_node, z: Some(edge_index)} = *target_edge.borrow() { 
                 // sanity check for reslient bond
-                assert!(self.universe_graph.edge_weight(edge_index).unwrap(), "This bond is not flagged as resilient! Breaking it would not yield a still-connected component.");
+                assert!(self.universe_graph.edge_weight(edge_index).unwrap(), "This bond ({}) is not flagged as resilient; breaking it would not yield a still-connected component!", target_edge.borrow());
                 let mut target_species: RefMut<MixtureSpecies> = self.species_annots.get(&head_node).unwrap().borrow_mut();
                 let old_last_edge_index = self.universe_graph.edge_indices().last().unwrap();
                 self.universe_graph.remove_edge(edge_index).unwrap();
@@ -1215,20 +1225,12 @@ pub mod reaction_mixture {
                 self.cycle_edges.pp_pp = cycle_edges_retained_pp_pp;
             } else {panic!("This edge did not have a bond index!")}
             self.update_mass_actions();
-            println!("After rule application, unary binds\n{}", self.unary_binding_pairs);
-            println!("After rule application, binary binds\n{}", self.binary_binding_pairs);
-            println!("After rule application, cycle edges\n{}", self.cycle_edges);
-            println!("After rule application, tree edges\n{}", self.tree_edges);
         }
 
         pub fn axn_axn_binary_unbind(&mut self, target_edge: Rc<RefCell<EdgeEnds>>) {
-            println!("Before rule application, unary binds\n{}", self.unary_binding_pairs);
-            println!("Before rule application, binary binds\n{}", self.binary_binding_pairs);
-            println!("Before rule application, cycle edges\n{}", self.cycle_edges);
-            println!("Before rule application, tree edges\n{}", self.tree_edges);
             if let EdgeEnds{a: head_node, b: tail_node, z: Some(edge_index)} = *target_edge.borrow() {
                 // sanity check for non-reslient bond
-                assert!(! self.universe_graph.edge_weight(edge_index).unwrap(), "This bond is flagged as resilient! Breaking it would yield a still-connected component.");
+                assert!(! self.universe_graph.edge_weight(edge_index).unwrap(), "This bond ({}) is flagged as resilient; breaking it would yield a still-connected component!", target_edge.borrow());
                 let old_last_edge_index = self.universe_graph.edge_indices().last().unwrap();
                 self.universe_graph.remove_edge(edge_index).unwrap();
                 let swapped_edge = self.edge_index_map.remove(&old_last_edge_index).unwrap();
@@ -1400,14 +1402,80 @@ pub mod reaction_mixture {
                 self.unary_binding_pairs.xh_xt.remove(&(tail_node, tail_node));
             } else {panic!("This edge did not have a bond index!")}
             self.update_mass_actions();
-            println!("After rule application, unary binds\n{}", self.unary_binding_pairs);
-            println!("After rule application, binary binds\n{}", self.binary_binding_pairs);
-            println!("After rule application, cycle edges\n{}", self.cycle_edges);
-            println!("After rule application, tree edges\n{}", self.tree_edges);
         }
 
+        /** Get a new copy of the mixture's rule activities. */
+        pub fn current_rule_activities(&self) -> RuleActivities {
+            self.rule_activities.clone()
+        }
+
+        /** Pretty print the mixture's rule activities. */
         pub fn print_rule_activities(&self) {
-            println!("{}", self.rule_activities)
+            println!("Rule activities:\n{}", self.rule_activities)
+        }
+
+        /** Get a new copy of the mixture's unary binding pairs. 
+         * These are bonds that could occur, but would not change the number of species in the
+         * mixture, occuring between agents already attached to some species.
+        */
+        pub fn current_unary_binding_pairs(&self) -> PossibleBondEmbeds {
+            self.unary_binding_pairs.clone()
+        }
+
+        /** Pretty print the mixture's unary binding pairs. 
+         * These are bond sthat could occur, but would not change the number of species in the
+         * mixture, occuring between agents already attached to some species.
+        */
+        pub fn print_unary_binding_pairs(&self) {
+            println!("Unary binding pairs:\n{}", self.unary_binding_pairs)
+        }
+
+        /** Get a new copy of the mixture's binary binding pairs. 
+         * These are bonds that could occur, and would reduce by one the number of species in the
+         * mixture, fusing two species into one.
+        */
+        pub fn current_binary_binding_pairs(&self) -> PossibleBondEmbeds {
+            self.binary_binding_pairs.clone()
+        }
+
+        /** Pretty print the mixture's binary binding pairs. 
+         * These are bonds that could occur, and would reduce by one the number of species in the
+         * mixture, fusing two species into one.
+        */
+        pub fn print_binary_binding_pairs(&self) {
+            println!("Binary binding pairs:\n{}", self.binary_binding_pairs)
+        }
+
+        /** Get a new copy of the mixture's bonds, who are cycle members. 
+         * These are bonds that exist, and whose breaking would not yield to a complex fragmenting
+         * into two complexes, but just to a less inter-connected complex.
+         */
+        pub fn current_cycle_edges(&self) -> EdgeTypes {
+            self.cycle_edges.clone()
+        }
+
+        /** Pretty print the mixture's bonds, who are cycle members. 
+         * These are bonds that exist, and whose breaking would not yield to a complex fragmenting
+         * into two complexes, but just to a less inter-connected complex.
+         */
+        pub fn print_cycle_edges(&self) {
+            println!("Edges in cycles:\n{}", self.cycle_edges)
+        }
+
+        /** Get a new copy of the mixture's bonds, who are not cycle members.
+         * These are bonds that exists, and whose breaking would yield to a complex fragmenting
+         * into two complexes.
+        */
+        pub fn current_tree_edges(&self) -> EdgeTypes {
+            self.tree_edges.clone()
+        }
+
+        /** Pretty print the mixture's bonds, who are not cycle members.
+         * These are bonds that exists, and whose breaking would yield to a complex fragmenting
+         * into two complexes.
+        */
+        pub fn print_tree_edges(&self) {
+            println!("Edges in trees:\n{}", self.tree_edges)
         }
     }
 }
@@ -1419,7 +1487,7 @@ mod tests {
     use std::{rc::Rc, cell::RefCell};
 
     #[test]
-    fn binary_reversability() {
+    fn simple_reversability() {
         let my_rates = RuleRates {
             axn_axn_u_bind: 1.0,
             axn_axn_b_bind: 1.0,
@@ -1442,47 +1510,191 @@ mod tests {
             apc_apc_u_free: 1.0,
             apc_apc_b_free: 1.0,
         };
-        let mut my_mix = Mixture::new_from_monomers(4, 2, my_rates);
-        let kappa_event_0 = my_mix.to_kappa();
-        let act_event_0 = my_mix.rule_activities.clone();
+        let mut my_mix = Mixture::new_from_monomers(5, 5, my_rates);
+        let u_b_0 = my_mix.current_unary_binding_pairs();
+        let b_b_0 = my_mix.current_binary_binding_pairs();
+        let u_f_0 = my_mix.current_cycle_edges();
+        let b_f_0 = my_mix.current_tree_edges();
         
         my_mix.axn_axn_binary_bind(NodeIndex::from(0), NodeIndex::from(3));
-        let kappa_event_1 = my_mix.to_kappa();
-        let act_event_1 = my_mix.rule_activities.clone();
-        
+        let u_b_1 = my_mix.current_unary_binding_pairs();
+        let b_b_1 = my_mix.current_binary_binding_pairs();
+        let u_f_1 = my_mix.current_cycle_edges();
+        let b_f_1 = my_mix.current_tree_edges();
+
         my_mix.axn_axn_binary_bind(NodeIndex::from(2), NodeIndex::from(0));
-        let kappa_event_2 = my_mix.to_kappa();
-        let act_event_2 = my_mix.rule_activities.clone();
+        let u_b_2 = my_mix.current_unary_binding_pairs();
+        let b_b_2 = my_mix.current_binary_binding_pairs();
+        let u_f_2 = my_mix.current_cycle_edges();
+        let b_f_2 = my_mix.current_tree_edges();
         
         my_mix.axn_axn_binary_bind(NodeIndex::from(1), NodeIndex::from(2));
         
         my_mix.axn_axn_binary_unbind(Rc::new(RefCell::new(EdgeEnds{
             a: NodeIndex::new(1), b: NodeIndex::new(2), z: Some(EdgeIndex::new(2))})));
-        let kappa_event_4 = my_mix.to_kappa();
-        let act_event_4 = my_mix.rule_activities.clone();
+        let u_b_4 = my_mix.current_unary_binding_pairs();
+        let b_b_4 = my_mix.current_binary_binding_pairs();
+        let u_f_4 = my_mix.current_cycle_edges();
+        let b_f_4 = my_mix.current_tree_edges();
 
-        assert_eq!(kappa_event_2, kappa_event_4);
-        assert_eq!(act_event_2, act_event_4);
+        assert_eq!(u_b_2, u_b_4);
+        assert_eq!(b_b_2, b_b_4);
+        assert_eq!(u_f_2, u_f_4);
+        assert_eq!(b_f_2, b_f_4);
         
         my_mix.axn_axn_binary_unbind(Rc::new(RefCell::new(EdgeEnds{
             a: NodeIndex::new(2), b: NodeIndex::new(0), z: Some(EdgeIndex::new(1))})));
-        let kappa_event_5 = my_mix.to_kappa();
-        let act_event_5 = my_mix.rule_activities.clone();
-
-        assert_eq!(kappa_event_1, kappa_event_5);
-        assert_eq!(act_event_1, act_event_5);
+        let u_b_5 = my_mix.current_unary_binding_pairs();
+        let b_b_5 = my_mix.current_binary_binding_pairs();
+        let u_f_5 = my_mix.current_cycle_edges();
+        let b_f_5 = my_mix.current_tree_edges();
+        
+        assert_eq!(u_b_1, u_b_5);
+        assert_eq!(b_b_1, b_b_5);
+        assert_eq!(u_f_1, u_f_5);
+        assert_eq!(b_f_1, b_f_5);
     
         my_mix.axn_axn_binary_unbind(Rc::new(RefCell::new(EdgeEnds{
             a: NodeIndex::new(0), b: NodeIndex::new(3), z: Some(EdgeIndex::new(0))})));
-        let kappa_event_6 = my_mix.to_kappa();
-        let act_event_6 = my_mix.rule_activities.clone();
+        let u_b_6 = my_mix.current_unary_binding_pairs();
+        let b_b_6 = my_mix.current_binary_binding_pairs();
+        let u_f_6 = my_mix.current_cycle_edges();
+        let b_f_6 = my_mix.current_tree_edges();
 
-        assert_eq!(kappa_event_0, kappa_event_6);
-        assert_eq!(act_event_0, act_event_6);
+        assert_eq!(u_b_0, u_b_6);
+        assert_eq!(b_b_0, b_b_6);
+        assert_eq!(u_f_0, u_f_6);
+        assert_eq!(b_f_0, b_f_6);
     }
 
     #[test]
-    fn two_cycles() {
-        //ToDo
+    #[should_panic(expected = "This head and tail nodes (3, 0) already belong to the same species; can't binary bind them!")]
+    fn unary_binding_embed_panics_binary_binding() {
+        let my_rates = RuleRates {
+            axn_axn_u_bind: 1.0,
+            axn_axn_b_bind: 1.0,
+            axn_axn_u_free: 1.0,
+            axn_axn_b_free: 1.0,
+            ap1_axn_u_bind: 0.0,
+            ap1_axn_b_bind: 0.0,
+            ap1_axn_u_free: 0.0,
+            ap1_axn_b_free: 0.0,
+            ap2_axn_u_bind: 0.0,
+            ap2_axn_b_bind: 0.0,
+            ap2_axn_u_free: 0.0,
+            ap2_axn_b_free: 0.0,
+            ap3_axn_u_bind: 0.0,
+            ap3_axn_b_bind: 0.0,
+            ap3_axn_u_free: 0.0,
+            ap3_axn_b_free: 0.0,
+            apc_apc_u_bind: 0.0,
+            apc_apc_b_bind: 0.0,
+            apc_apc_u_free: 0.0,
+            apc_apc_b_free: 0.0,
+        };
+        let mut my_mix = Mixture::new_from_monomers(5, 5, my_rates);
+        my_mix.axn_axn_binary_bind(NodeIndex::from(0), NodeIndex::from(1));
+        my_mix.axn_axn_binary_bind(NodeIndex::from(1), NodeIndex::from(2));
+        my_mix.axn_axn_binary_bind(NodeIndex::from(2), NodeIndex::from(3));
+        my_mix.axn_axn_binary_bind(NodeIndex::from(3), NodeIndex::from(0));
+    }
+
+    #[test]
+    #[should_panic(expected = "This head and tail nodes (3, 4) do not already belong to the same species; can't unary bind them!")]
+    fn binary_binding_embed_panics_unary_binding() {
+        let my_rates = RuleRates {
+            axn_axn_u_bind: 1.0,
+            axn_axn_b_bind: 1.0,
+            axn_axn_u_free: 1.0,
+            axn_axn_b_free: 1.0,
+            ap1_axn_u_bind: 0.0,
+            ap1_axn_b_bind: 0.0,
+            ap1_axn_u_free: 0.0,
+            ap1_axn_b_free: 0.0,
+            ap2_axn_u_bind: 0.0,
+            ap2_axn_b_bind: 0.0,
+            ap2_axn_u_free: 0.0,
+            ap2_axn_b_free: 0.0,
+            ap3_axn_u_bind: 0.0,
+            ap3_axn_b_bind: 0.0,
+            ap3_axn_u_free: 0.0,
+            ap3_axn_b_free: 0.0,
+            apc_apc_u_bind: 0.0,
+            apc_apc_b_bind: 0.0,
+            apc_apc_u_free: 0.0,
+            apc_apc_b_free: 0.0,
+        };
+        let mut my_mix = Mixture::new_from_monomers(6, 1, my_rates);
+        my_mix.axn_axn_binary_bind(NodeIndex::from(0), NodeIndex::from(1));
+        my_mix.axn_axn_binary_bind(NodeIndex::from(1), NodeIndex::from(2));
+        my_mix.axn_axn_binary_bind(NodeIndex::from(2), NodeIndex::from(3));
+        my_mix.axn_axn_unary_bind(NodeIndex::from(3), NodeIndex::from(4));
+    }
+
+    #[test]
+    #[should_panic(expected = "This bond (#1 @ 1 -> 2) is flagged as resilient; breaking it would yield a still-connected component!")]
+    fn unary_unbinding_embed_panics_binary_unbinding() {
+        let my_rates = RuleRates {
+            axn_axn_u_bind: 1.0,
+            axn_axn_b_bind: 1.0,
+            axn_axn_u_free: 1.0,
+            axn_axn_b_free: 1.0,
+            ap1_axn_u_bind: 0.0,
+            ap1_axn_b_bind: 0.0,
+            ap1_axn_u_free: 0.0,
+            ap1_axn_b_free: 0.0,
+            ap2_axn_u_bind: 0.0,
+            ap2_axn_b_bind: 0.0,
+            ap2_axn_u_free: 0.0,
+            ap2_axn_b_free: 0.0,
+            ap3_axn_u_bind: 0.0,
+            ap3_axn_b_bind: 0.0,
+            ap3_axn_u_free: 0.0,
+            ap3_axn_b_free: 0.0,
+            apc_apc_u_bind: 0.0,
+            apc_apc_b_bind: 0.0,
+            apc_apc_u_free: 0.0,
+            apc_apc_b_free: 0.0,
+        };
+        let mut my_mix = Mixture::new_from_monomers(5, 5, my_rates);
+        my_mix.axn_axn_binary_bind(NodeIndex::from(0), NodeIndex::from(1));
+        my_mix.axn_axn_binary_bind(NodeIndex::from(1), NodeIndex::from(2));
+        my_mix.axn_axn_binary_bind(NodeIndex::from(2), NodeIndex::from(3));
+        my_mix.axn_axn_unary_bind(NodeIndex::from(3), NodeIndex::from(0));
+        my_mix.axn_axn_binary_unbind(Rc::new(RefCell::new(EdgeEnds{a: NodeIndex::new(1), b: NodeIndex::new(2), z: Some(EdgeIndex::new(1))})))
+    }
+
+    #[test]
+    #[should_panic(expected = "This bond (#2 @ 2 -> 3) is not flagged as resilient; breaking it would not yield a still-connected component!")]
+    fn binary_unbinding_embed_panics_unary_unbinding() {
+        let my_rates = RuleRates {
+            axn_axn_u_bind: 1.0,
+            axn_axn_b_bind: 1.0,
+            axn_axn_u_free: 1.0,
+            axn_axn_b_free: 1.0,
+            ap1_axn_u_bind: 0.0,
+            ap1_axn_b_bind: 0.0,
+            ap1_axn_u_free: 0.0,
+            ap1_axn_b_free: 0.0,
+            ap2_axn_u_bind: 0.0,
+            ap2_axn_b_bind: 0.0,
+            ap2_axn_u_free: 0.0,
+            ap2_axn_b_free: 0.0,
+            ap3_axn_u_bind: 0.0,
+            ap3_axn_b_bind: 0.0,
+            ap3_axn_u_free: 0.0,
+            ap3_axn_b_free: 0.0,
+            apc_apc_u_bind: 0.0,
+            apc_apc_b_bind: 0.0,
+            apc_apc_u_free: 0.0,
+            apc_apc_b_free: 0.0,
+        };
+        let mut my_mix = Mixture::new_from_monomers(6, 5, my_rates);
+        my_mix.axn_axn_binary_bind(NodeIndex::from(0), NodeIndex::from(1));
+        my_mix.axn_axn_binary_bind(NodeIndex::from(1), NodeIndex::from(2));
+        my_mix.axn_axn_binary_bind(NodeIndex::from(2), NodeIndex::from(3));
+        my_mix.axn_axn_binary_bind(NodeIndex::from(3), NodeIndex::from(4));
+        my_mix.axn_axn_binary_bind(NodeIndex::from(4), NodeIndex::from(5));
+        my_mix.axn_axn_unary_unbind(Rc::new(RefCell::new(EdgeEnds{a: NodeIndex::new(2), b: NodeIndex::new(3), z: Some(EdgeIndex::new(2))})))
     }
 }
