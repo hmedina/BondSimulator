@@ -3,7 +3,7 @@ pub mod agent_types {
 
     #[derive(Debug)]
     /**
-     * Structure for an Axn type-node. The fields hold either a None when unbound, or a 
+     * Structure for an Axn type-node. The fields hold either a `None` when unbound, or a 
      * `Some(EdgeIndex)` when bound. One field per binding site.
     */
     pub struct AxnNode {
@@ -12,6 +12,9 @@ pub mod agent_types {
         pub xp_bond: Option<EdgeIndex>
     }   
 
+    /**
+     * By default, Axn nodes are created fully unbound.
+    */
     impl Default for AxnNode {
         fn default() -> Self {
             AxnNode {
@@ -24,7 +27,7 @@ pub mod agent_types {
 
     #[derive(Debug)]
     /**
-     * Structure for an APC type-node. The fields hold either a None when unbound, or a
+     * Structure for an APC type-node. The fields hold either a `None` when unbound, or a
      * `Some(EdgeIndex)` when bound. One field per binding site.
     */
     pub struct ApcNode {
@@ -34,6 +37,9 @@ pub mod agent_types {
         pub pp_bond: Option<EdgeIndex>
     }   
 
+    /**
+     * By default, APC nodes are created fully unbound.
+    */
     impl Default for ApcNode {
         fn default() -> Self {
             ApcNode {
@@ -539,7 +545,8 @@ pub mod possible_bond_embeds {
 
     impl PossibleBondEmbeds {
         /**
-         * Constructor that preallocates the maximum possible sizes, but leaves the sets empty.
+         * Used to track unary instances; constructor allocates maximum required space but leaves
+         * the sets empty.
         */
         pub fn new_from_masses_unary(axn_mass: usize, apc_mass: usize) -> Self {
             PossibleBondEmbeds {
@@ -551,6 +558,11 @@ pub mod possible_bond_embeds {
             }
         }
 
+        /**
+         * Used to track binary instances; constructor allocates maximum required space, and
+         * populates the sets with the appropriate NodeIndex combinatorics, cleaning up 
+         * self-bonds afterwards.
+        */
         pub fn new_from_masses_binary(axn_mass: usize, apc_mass: usize) -> Self {
             let x_mass: u32 = axn_mass as u32;
             let p_mass: u32 = apc_mass as u32;
@@ -674,8 +686,8 @@ pub mod reaction_mixture {
         unary_binding_pairs: PossibleBondEmbeds,
         binary_binding_pairs: PossibleBondEmbeds,
         rule_activities: RuleActivities,
-        pub simulated_time: f64,
-        pub simulated_events: usize,
+        simulated_time: f64,
+        simulated_events: usize,
         simulator_rng: ThreadRng
     }
     
@@ -822,6 +834,9 @@ pub mod reaction_mixture {
             mixture_string            
         }
 
+        /**
+         * Create a new mixture from a desired number of monomers, and desired rule rates.
+        */
         pub fn new_from_monomers(x_mass: usize, p_mass: usize, rule_rates: RuleRates) -> Mixture {
             let mut net: Graph<AgentType, bool, Undirected> = Graph::with_capacity(x_mass + p_mass, x_mass * 3 + p_mass * 4);   // the universe graph
             let mut spc: BTreeMap<NodeIndex, Rc<RefCell<MixtureSpecies>>> = BTreeMap::new();                                    // the global agent -> species map
@@ -890,6 +905,10 @@ pub mod reaction_mixture {
                 simulated_events: 0, simulated_time: 0.0}
         }
     
+        /**
+         * Create a bond that creates a cycle, connecting two agents that were already connected
+         * via some other components.
+        */
         pub fn axn_axn_unary_bind(&mut self, head_node: NodeIndex, tail_node: NodeIndex) {
             // sanity check for unary-ness
             assert_eq!(self.species_annots.get(&head_node), self.species_annots.get(&tail_node), "This head and tail nodes ({}, {}) do not already belong to the same species; can't unary bind them!", head_node.index(), tail_node.index());
@@ -991,6 +1010,9 @@ pub mod reaction_mixture {
             self.update_mass_actions();
         }
     
+        /**
+         * Create a bond that joins two species into one.
+        */
         pub fn axn_axn_binary_bind(&mut self, head_node: NodeIndex, tail_node: NodeIndex) {
             // sanity check for binary-ness
             assert_ne!(self.species_annots.get(&head_node), self.species_annots.get(&tail_node), "This head and tail nodes ({}, {}) already belong to the same species; can't binary bind them!", head_node.index(), tail_node.index());
@@ -1106,6 +1128,10 @@ pub mod reaction_mixture {
             self.update_mass_actions();
         }
 
+        /**
+         * Break a bond that is a cycle member; this does not partition one species into two, it
+         * simply reduces the internal connectivity of said species.
+        */
         pub fn axn_axn_unary_unbind(&mut self, target_edge: Rc<RefCell<EdgeEnds>>) {
             if let EdgeEnds{a: head_node, b: tail_node, z: Some(edge_index)} = *target_edge.borrow() { 
                 // sanity check for reslient bond
@@ -1227,6 +1253,9 @@ pub mod reaction_mixture {
             self.update_mass_actions();
         }
 
+        /**
+         * Break a bond that is not a cycle member; this partitions one species into two.
+        */
         pub fn axn_axn_binary_unbind(&mut self, target_edge: Rc<RefCell<EdgeEnds>>) {
             if let EdgeEnds{a: head_node, b: tail_node, z: Some(edge_index)} = *target_edge.borrow() {
                 // sanity check for non-reslient bond
@@ -1414,65 +1443,70 @@ pub mod reaction_mixture {
             println!("Rule activities:\n{}", self.rule_activities)
         }
 
-        /** Get a new copy of the mixture's unary binding pairs. 
-         * These are bonds that could occur, but would not change the number of species in the
-         * mixture, occuring between agents already attached to some species.
+        /** 
+         * Get a new copy of the mixture's unary binding pairs. These are bonds that could occur,
+         * but would not change the number of species in the mixture, occuring between agents
+         * already attached to some species.
         */
         pub fn current_unary_binding_pairs(&self) -> PossibleBondEmbeds {
             self.unary_binding_pairs.clone()
         }
 
-        /** Pretty print the mixture's unary binding pairs. 
-         * These are bond sthat could occur, but would not change the number of species in the
-         * mixture, occuring between agents already attached to some species.
+        /** 
+         * Pretty print the mixture's unary binding pairs. These are bond sthat could occur, but
+         * would not change the number of species in the mixture, occuring between agents already
+         * attached to some species.
         */
         pub fn print_unary_binding_pairs(&self) {
             println!("Unary binding pairs:\n{}", self.unary_binding_pairs)
         }
 
-        /** Get a new copy of the mixture's binary binding pairs. 
-         * These are bonds that could occur, and would reduce by one the number of species in the
-         * mixture, fusing two species into one.
+        /** 
+         * Get a new copy of the mixture's binary binding pairs. These are bonds that could occur,
+         * and would reduce by one the number of species in the mixture, fusing two species into
+         * one.
         */
         pub fn current_binary_binding_pairs(&self) -> PossibleBondEmbeds {
             self.binary_binding_pairs.clone()
         }
 
-        /** Pretty print the mixture's binary binding pairs. 
-         * These are bonds that could occur, and would reduce by one the number of species in the
-         * mixture, fusing two species into one.
+        /** 
+         * Pretty print the mixture's binary binding pairs. These are bonds that could occur, and
+         * would reduce by one the number of species in the mixture, fusing two species into one.
         */
         pub fn print_binary_binding_pairs(&self) {
             println!("Binary binding pairs:\n{}", self.binary_binding_pairs)
         }
 
-        /** Get a new copy of the mixture's bonds, who are cycle members. 
-         * These are bonds that exist, and whose breaking would not yield to a complex fragmenting
-         * into two complexes, but just to a less inter-connected complex.
+        /** 
+         * Get a new copy of the mixture's bonds, who are cycle members. These are bonds that
+         * exist, and whose breaking would not yield to a complex fragmenting into two complexes,
+         * but just to a less inter-connected complex.
          */
         pub fn current_cycle_edges(&self) -> EdgeTypes {
             self.cycle_edges.clone()
         }
 
-        /** Pretty print the mixture's bonds, who are cycle members. 
-         * These are bonds that exist, and whose breaking would not yield to a complex fragmenting
-         * into two complexes, but just to a less inter-connected complex.
+        /** 
+         * Pretty print the mixture's bonds, who are cycle members. These are bonds that exist,
+         * and whose breaking would not yield to a complex fragmenting into two complexes, but
+         * just to a less inter-connected complex.
          */
         pub fn print_cycle_edges(&self) {
             println!("Edges in cycles:\n{}", self.cycle_edges)
         }
 
-        /** Get a new copy of the mixture's bonds, who are not cycle members.
-         * These are bonds that exists, and whose breaking would yield to a complex fragmenting
-         * into two complexes.
+        /** 
+         * Get a new copy of the mixture's bonds, who are not cycle members. These are bonds that
+         * exists, and whose breaking would yield to a complex fragmenting into two complexes.
         */
         pub fn current_tree_edges(&self) -> EdgeTypes {
             self.tree_edges.clone()
         }
 
-        /** Pretty print the mixture's bonds, who are not cycle members.
-         * These are bonds that exists, and whose breaking would yield to a complex fragmenting
-         * into two complexes.
+        /** 
+         * Pretty print the mixture's bonds, who are not cycle members. These are bonds that
+         * exists, and whose breaking would yield to a complex fragmenting into two complexes.
         */
         pub fn print_tree_edges(&self) {
             println!("Edges in trees:\n{}", self.tree_edges)
