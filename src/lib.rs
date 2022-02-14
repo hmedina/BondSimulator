@@ -1453,7 +1453,7 @@ pub mod reaction_mixture {
         }
 
         /** 
-         * Pretty print the mixture's unary binding pairs. These are bond sthat could occur, but
+         * Pretty print the mixture's unary binding pairs. These are bonds that could occur, but
          * would not change the number of species in the mixture, occuring between agents already
          * attached to some species.
         */
@@ -1480,7 +1480,7 @@ pub mod reaction_mixture {
 
         /** 
          * Get a new copy of the mixture's bonds, who are cycle members. These are bonds that
-         * exist, and whose breaking would not yield to a complex fragmenting into two complexes,
+         * exist, and whose breaking would not lead to a complex fragmenting into two complexes,
          * but just to a less inter-connected complex.
          */
         pub fn current_cycle_edges(&self) -> EdgeTypes {
@@ -1489,7 +1489,7 @@ pub mod reaction_mixture {
 
         /** 
          * Pretty print the mixture's bonds, who are cycle members. These are bonds that exist,
-         * and whose breaking would not yield to a complex fragmenting into two complexes, but
+         * and whose breaking would not lead to a complex fragmenting into two complexes, but
          * just to a less inter-connected complex.
          */
         pub fn print_cycle_edges(&self) {
@@ -1498,7 +1498,7 @@ pub mod reaction_mixture {
 
         /** 
          * Get a new copy of the mixture's bonds, who are not cycle members. These are bonds that
-         * exists, and whose breaking would yield to a complex fragmenting into two complexes.
+         * exist, and whose breaking would lead to a complex fragmenting into two complexes.
         */
         pub fn current_tree_edges(&self) -> EdgeTypes {
             self.tree_edges.clone()
@@ -1506,7 +1506,7 @@ pub mod reaction_mixture {
 
         /** 
          * Pretty print the mixture's bonds, who are not cycle members. These are bonds that
-         * exists, and whose breaking would yield to a complex fragmenting into two complexes.
+         * exist, and whose breaking would lead to a complex fragmenting into two complexes.
         */
         pub fn print_tree_edges(&self) {
             println!("Edges in trees:\n{}", self.tree_edges)
