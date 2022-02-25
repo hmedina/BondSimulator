@@ -1,7 +1,7 @@
 [package]
 name = "axin_apc_simulator"
 authors = ["Hector Medina Abarca <hfm5@med.harvard.edu>"]
-version = "0.1.0"
+version = "0.3.0"
 edition = "2021"
 repository = "https://github.com/hmedina/XPS"
 license = "MIT"
