@@ -549,7 +549,7 @@ pub mod reaction_mixture {
     use crate::collectors::{OpenPorts, MixtureSpecies, InteractingTracker};
     use petgraph::{graph::Graph, algo::astar::astar, prelude::*, visit::Dfs};
     use rand::{distributions::WeightedIndex, prelude::*};
-    use std::cell::{RefCell, RefMut};
+    use std::cell::{RefCell, RefMut, Ref};
     use std::collections::{VecDeque, BTreeMap, BTreeSet};
     use std::rc::Rc;
 
@@ -963,7 +963,7 @@ pub mod reaction_mixture {
                     Some(this_index) if this_index == &old_last_edge_index => *this_index = edge_index,
                     _ => panic!("Collateral node {} did not have the expected edge index {} for updating to {}!", collateral_agent_b, old_last_edge_index.index(), edge_index.index())
                 }
-                *self.edge_index_map.get_mut(&edge_index).unwrap() = Rc::clone(&swapped_edge);
+                *self.edge_index_map.get_mut(&edge_index).unwrap() = swapped_edge;
             }
             // sanity checks for bond breaking; then update bond indexes on the agent
             let node_a: &mut Agent = self.universe_graph.node_weight_mut(head_node).unwrap();
@@ -978,7 +978,7 @@ pub mod reaction_mixture {
                 Some(some_edge) if *some_edge == edge_index => &mut None,
                 _ => panic!("This node {} was not already bound at expected bond {}!", node_b, edge_index.index())
             };
-            target_species.edges.remove(&target_bond);
+            assert!(target_species.edges.remove(&target_bond), "Bond {} was not already present as an available option in the species tracker!", target_bond.borrow());
             assert!(self.interactions.get_mut(&bond_type).unwrap().set.remove(&target_bond), "Bond {} was not already present as an available option!", target_bond.borrow());
             assert!(self.ports.map.get_mut(&bond_type.pair_1).unwrap().insert(head_node), "Site {} on node {} was already listed as free prior to unbinding!", bond_type.pair_1, node_a);
             assert!(self.ports.map.get_mut(&bond_type.pair_2).unwrap().insert(tail_node), "Site {} on node {} was already listed as free prior to unbinding!", bond_type.pair_2, node_b);
@@ -1028,181 +1028,140 @@ pub mod reaction_mixture {
         /**
          * Break a bond that is not a cycle member; this partitions one species into two.
         */
-        pub fn binary_free(&mut self, target_edge: Rc<RefCell<EdgeEnds>>) {
-            if let EdgeEnds{a: head_node, b: tail_node, z: Some(edge_index)} = *target_edge.borrow() {
-                // sanity check for non-reslient bond
-                assert!(! self.universe_graph.edge_weight(edge_index).unwrap(), "This bond ({}) is flagged as resilient; breaking it would yield a still-connected component!", target_edge.borrow());
-                let old_last_edge_index = self.universe_graph.edge_indices().last().unwrap();
-                self.universe_graph.remove_edge(edge_index).unwrap();
-                let swapped_edge = self.edge_index_map.remove(&old_last_edge_index).unwrap();
-                if old_last_edge_index != edge_index {
-                    // remove edge & update caches; keep edge index tracker up to date
-                    swapped_edge.borrow_mut().z = Some(edge_index);
-                    let swapped_colateral_a = self.universe_graph.node_weight_mut(swapped_edge.borrow().a).unwrap();
-                    match swapped_colateral_a {
-                        AgentType::AxnNode(x1, x2, x3) => match (&x1, &x2, &x3) {
-                            (Some(this_index), _, _) if this_index == &old_last_edge_index => *x1 = Some(edge_index),
-                            (_, Some(this_index), _) if this_index == &old_last_edge_index => *x2 = Some(edge_index),
-                            (_, _, Some(this_index)) if this_index == &old_last_edge_index => *x3 = Some(edge_index),
-                            _ => panic!("This node, an Axn, did not have the expected old edge index for updating!")
-                        }
-                        AgentType::ApcNode(p1, p2, p3, p4) => match (&p1, &p2, &p3, &p4) {
-                            (Some(this_index), _, _, _) if this_index == &old_last_edge_index => *p1 = Some(edge_index),
-                            (_, Some(this_index), _, _) if this_index == &old_last_edge_index => *p2 = Some(edge_index),
-                            (_, _, Some(this_index), _) if this_index == &old_last_edge_index => *p3 = Some(edge_index),
-                            (_, _, _, Some(this_index)) if this_index == &old_last_edge_index => *p4 = Some(edge_index),
-                            _ => panic!("This node, an APC, did not have the expected old edge index for updating!")
-                        }
-                    }
-                    let swapped_colateral_b = self.universe_graph.node_weight_mut(swapped_edge.borrow().b).unwrap();
-                    match swapped_colateral_b {
-                        AgentType::AxnNode(x1, x2, x3) => match (&x1, &x2, &x3) {
-                            (Some(this_index), _, _) if this_index == &old_last_edge_index => *x1 = Some(edge_index),
-                            (_, Some(this_index), _) if this_index == &old_last_edge_index => *x2 = Some(edge_index),
-                            (_, _, Some(this_index)) if this_index == &old_last_edge_index => *x3 = Some(edge_index),
-                            _ => panic!("This node, an Axn, did not have the expected old edge index for updating!")
-                        }
-                        AgentType::ApcNode(p1, p2, p3, p4) => match (&p1, &p2, &p3, &p4) {
-                            (Some(this_index), _, _, _) if this_index == &old_last_edge_index => *p1 = Some(edge_index),
-                            (_, Some(this_index), _, _) if this_index == &old_last_edge_index => *p2 = Some(edge_index),
-                            (_, _, Some(this_index), _) if this_index == &old_last_edge_index => *p3 = Some(edge_index),
-                            (_, _, _, Some(this_index)) if this_index == &old_last_edge_index => *p4 = Some(edge_index),
-                            _ => panic!("This node, an APC, did not have the expected old edge index for updating!")
-                        }
-                    }
-                    *self.edge_index_map.get_mut(&edge_index).unwrap() = swapped_edge;
+        pub fn binary_free(&mut self, target_bond: Rc<RefCell<BondEmbed<'a>>>) {
+            let head_node: NodeIndex = target_bond.borrow().a_index;
+            let tail_node: NodeIndex = target_bond.borrow().b_index;
+            let bond_type: BondType<'a> = target_bond.borrow().bond_type;
+            let edge_index: EdgeIndex = target_bond.borrow().z.unwrap();
+            // sanity check for non-reslient bond
+            assert!(! self.universe_graph.edge_weight(edge_index).unwrap(), "This bond ({}) is flagged as resilient; breaking it would yield a still-connected component!", target_bond.borrow());
+            let mut target_species: RefMut<MixtureSpecies> = self.species_annots.get(&head_node).unwrap().borrow_mut();
+            let old_last_edge_index = self.universe_graph.edge_indices().last().unwrap();
+            self.universe_graph.remove_edge(edge_index).unwrap();
+            let swapped_edge = self.edge_index_map.remove(&old_last_edge_index).unwrap();
+            // deal with the last-edge-index invalidation on edge deletion
+            // aka, the collaterals
+            // we need to update the weight of Agents in the universe_graph,
+            // and use the edge_index_map to update the BondEmbeds
+            if old_last_edge_index != edge_index {
+                swapped_edge.borrow_mut().z = Some(edge_index);
+                let collateral_bond_type: BondType = swapped_edge.borrow().bond_type;
+                let collateral_agent_a: &mut Agent = self.universe_graph.node_weight_mut(swapped_edge.borrow().a_index).unwrap();
+                let collateral_agent_b: &mut Agent = self.universe_graph.node_weight_mut(swapped_edge.borrow().b_index).unwrap();
+                let collateral_site_a = collateral_agent_a.sites.get(collateral_bond_type.pair_1.site).unwrap();
+                let collateral_site_b = collateral_agent_b.sites.get(collateral_bond_type.pair_2.site).unwrap();
+                match collateral_site_a {
+                    Some(this_index) if this_index == &old_last_edge_index => *this_index = edge_index,
+                    _ => panic!("Collateral node {} did not have the expected edge index {} for updating to {}!", collateral_agent_a, old_last_edge_index.index(), edge_index.index())
                 }
-                self.tree_edges.xh_xt.remove(&target_edge);
-                self.species_annots.get(&head_node).unwrap().borrow_mut().edges.xh_xt.remove(&target_edge);
-                // discover what node indexes ended where; the loop terminates once the smallest graph is mapped-out
-                let mut dfs_head = Dfs::new(&self.universe_graph, head_node);
-                let mut dfs_tail = Dfs::new(&self.universe_graph, tail_node);
-                let mut head_graph_indexes: BTreeSet<NodeIndex> = BTreeSet::new();
-                let mut tail_graph_indexes: BTreeSet<NodeIndex> = BTreeSet::new();
-                let mut nx_head = dfs_head.next(&self.universe_graph);
-                let mut nx_tail = dfs_tail.next(&self.universe_graph);
-                loop {
-                    match (nx_head, nx_tail) {
-                        (Some(in_head_found), Some(in_tail_found)) => {
-                            head_graph_indexes.insert(in_head_found);
-                            tail_graph_indexes.insert(in_tail_found);
-                            nx_head = dfs_head.next(&self.universe_graph);
-                            nx_tail = dfs_tail.next(&self.universe_graph);
-                        },
-                        (None, Some(_)) => {
-                            // we've mapped-out the head node's graph
-                            tail_graph_indexes = self.species_annots.get(&tail_node).unwrap().borrow().agent_set.difference(&head_graph_indexes).cloned().collect();
-                            break
-                        },
-                        (Some(_), None) => {
-                            // we've mapped-out the tail node's graph
-                            head_graph_indexes = self.species_annots.get(&head_node).unwrap().borrow().agent_set.difference(&tail_graph_indexes).cloned().collect();
-                            break
-                        },
-                        (None, None) => break
-                    }
+                match collateral_site_b {
+                    Some(this_index) if this_index == &old_last_edge_index => *this_index = edge_index,
+                    _ => panic!("Collateral node {} did not have the expected edge index {} for updating to {}!", collateral_agent_b, old_last_edge_index.index(), edge_index.index())
                 }
-                let (ejected_mark, ejected_indexes, retained_mark, retained_indexes) =  // ToDo should this be reversed? Iterate over small & lookup over big instead?
-                    if head_graph_indexes.len() <= tail_graph_indexes.len()
-                        {(head_node, head_graph_indexes, tail_node, tail_graph_indexes)}
-                    else 
-                        {(tail_node, tail_graph_indexes, head_node, head_graph_indexes)};
-                // create new species cache, in-place modify old species cache
-                let ejected_ports: OpenPorts = self.species_annots.get(&retained_mark).unwrap().borrow_mut().ports.eject_where(&ejected_indexes);
-                let ejected_edges: EdgeTypes = self.species_annots.get(&retained_mark).unwrap().borrow_mut().edges.eject_where(&ejected_indexes);
-                self.species_annots.get(&retained_mark).unwrap().borrow_mut().size -= &ejected_indexes.len();
-                self.species_annots.get(&retained_mark).unwrap().borrow_mut().agent_set = retained_indexes;
-                let new_species = Rc::new(RefCell::new(MixtureSpecies{
-                    ports: ejected_ports,
-                    edges: ejected_edges,
-                    size: ejected_indexes.len(),
-                    agent_set: ejected_indexes.clone()
-                }));
-                // update the species annotation tracker
-                for node_index in &ejected_indexes {
-                    self.species_annots.entry(*node_index).and_modify(|e| {*e = Rc::clone(&new_species)});
+                *self.edge_index_map.get_mut(&edge_index).unwrap() = swapped_edge;
+            }
+            // sanity checks for bond breaking; update bond indexes on the agent-type
+            let node_a: &mut Agent = self.universe_graph.node_weight_mut(head_node).unwrap();
+            let site_a = node_a.sites.get_mut(bond_type.pair_1.site).unwrap();
+            site_a = match site_a {
+                Some(some_edge) if *some_edge == edge_index => &mut None,
+                _ => panic!("This node {} was not already bound at expected bond {}!", node_a, edge_index.index())
+            };
+            let node_b: &mut Agent = self.universe_graph.node_weight_mut(tail_node).unwrap();
+            let site_b = node_b.sites.get_mut(bond_type.pair_2.site).unwrap();
+            site_b = match site_b {
+                Some(some_edge) if *some_edge == edge_index => &mut None,
+                _ => panic!("This node {} was not already bound at expected bond {}!", node_b, edge_index.index())
+            };
+            assert!(target_species.edges.remove(&target_bond), "Bond {} was not already present as an available option in the species tracker!", target_bond.borrow());
+            assert!(self.interactions.get_mut(&bond_type).unwrap().set.remove(&target_bond), "Bond {} was not already present as an available option!", target_bond.borrow());
+            assert!(self.ports.map.get_mut(&bond_type.pair_1).unwrap().insert(head_node), "Site {} on node {} was already listed as free prior to unbinding!", bond_type.pair_1, node_a);
+            assert!(self.ports.map.get_mut(&bond_type.pair_2).unwrap().insert(tail_node), "Site {} on node {} was already listed as free prior to unbinding!", bond_type.pair_2, node_b);
+            assert!(target_species.ports.map.get_mut(&bond_type.pair_1).unwrap().insert(head_node), "Site {} on node {} was already listed as free prior to this unbinding on the species cache!", bond_type.pair_1, node_a);
+            assert!(target_species.ports.map.get_mut(&bond_type.pair_2).unwrap().insert(tail_node), "Site {} on node {} was already listed as free prior to this unbinding on the species cache!", bond_type.pair_2, node_b);
+            // discover what node indexes ended where; the loop terminates once the smallest graph is mapped-out
+            let mut dfs_head = Dfs::new(&self.universe_graph, head_node);
+            let mut dfs_tail = Dfs::new(&self.universe_graph, tail_node);
+            let mut head_graph_indexes: BTreeSet<NodeIndex> = BTreeSet::new();
+            let mut tail_graph_indexes: BTreeSet<NodeIndex> = BTreeSet::new();
+            let mut nx_head = dfs_head.next(&self.universe_graph);
+            let mut nx_tail = dfs_tail.next(&self.universe_graph);
+            loop {
+                match (nx_head, nx_tail) {
+                    (Some(in_head_found), Some(in_tail_found)) => {
+                        head_graph_indexes.insert(in_head_found);
+                        tail_graph_indexes.insert(in_tail_found);
+                        nx_head = dfs_head.next(&self.universe_graph);
+                        nx_tail = dfs_tail.next(&self.universe_graph);
+                    },
+                    (None, Some(_)) => {
+                        // we've mapped-out the head node's graph; tail node's graph is the difference of original set minus this mapped-out set
+                        tail_graph_indexes = self.species_annots.get(&tail_node).unwrap().borrow().agent_set.difference(&head_graph_indexes).cloned().collect();
+                        break
+                    },
+                    (Some(_), None) => {
+                        // we've mapped-out the tail node's graph
+                        head_graph_indexes = self.species_annots.get(&head_node).unwrap().borrow().agent_set.difference(&tail_graph_indexes).cloned().collect();
+                        break
+                    },
+                    (None, None) => break
                 }
-                // sanity checks for bond breaking; update bond indexes on the agent-type
-                let node_a: &mut AgentType = self.universe_graph.node_weight_mut(head_node).unwrap();
-                match node_a {
-                    AgentType::AxnNode(x1, _, _) => match x1 {
-                        Some(_) => *x1 = None,
-                        None => panic!("This Axn head was not already bound!")
-                    }
-                    AgentType::ApcNode(_, _, _, _) => panic!("This matched an APC node instead of a bond-headed Axin node!")
-                }
-                let node_b = self.universe_graph.node_weight_mut(tail_node).unwrap();
-                match node_b {
-                    AgentType::AxnNode(_, x2, _) => match x2 {
-                        Some(_) => *x2 = None,
-                        None => panic!("This Axn tail was not already bound!")
-                    }
-                    AgentType::ApcNode(_, _, _, _) => panic!("This matched an APC node instead of a bond-tailed Axin node!")
-                }
-                // update the species set, open port trackers, global edge tracker
-                self.species_set.push_back(Rc::clone(&new_species));
-                // binding opportunities that were unary, but will now be binary
-                for free_head in self.species_annots.get(&retained_mark).unwrap().borrow().ports.xh_free.union(&self.species_annots.get(&ejected_mark).unwrap().borrow().ports.xh_free).into_iter() {
-                    for free_tail in self.species_annots.get(&ejected_mark).unwrap().borrow().ports.xt_free.union(&self.species_annots.get(&retained_mark).unwrap().borrow().ports.xt_free).into_iter() {
-                        match self.unary_binding_pairs.xh_xt.take(&(*free_head, *free_tail)) {
-                            Some((a_head, a_tail)) => {assert!(self.binary_binding_pairs.xh_xt.insert((a_head, a_tail)), "This pair already cached as binary!")},
-                            None => ()
-                        }
+            }
+            let (ejected_mark, ejected_indexes, retained_mark, retained_indexes) =  // Iterate over small & lookup over big
+                if head_graph_indexes.len() >= tail_graph_indexes.len()
+                    {(head_node, head_graph_indexes, tail_node, tail_graph_indexes)}
+                else 
+                    {(tail_node, tail_graph_indexes, head_node, head_graph_indexes)};
+            // create new species cache, in-place modify old species cache
+            let retained_species: RefMut<MixtureSpecies> = self.species_annots.get_mut(&retained_mark).unwrap().borrow_mut();
+            let ejected_ports: OpenPorts = retained_species.ports.eject_where(&ejected_indexes);
+            let ejected_edges: BTreeSet<Rc<RefCell<BondEmbed>>> = retained_species.edges.drain_filter(|b| ejected_indexes.contains(&b.borrow().a_index)).collect();
+            retained_species.size -= &ejected_indexes.len();
+            retained_species.agent_set = retained_indexes;
+            let new_species = Rc::new(RefCell::new(MixtureSpecies{
+                ports: ejected_ports,
+                edges: ejected_edges,
+                size: ejected_indexes.len(),
+                agent_set: ejected_indexes.clone()
+            }));
+            // update the species trackers, per node index & global
+            for node_index in &ejected_indexes {
+                self.species_annots.entry(*node_index).and_modify(|e| {*e = Rc::clone(&new_species)});
+            }
+            self.species_set.push_back(Rc::clone(&new_species));
+            // binding opportunities that were unary, but will now be binary
+            for some_unary_bond_type in self.interactions.keys().filter(|b| b.arity == InteractionArity::Unary && b.direction == InteractionDirection::Bind) {
+                let some_binary_bond_type: BondType = BondType{arity: InteractionArity::Binary, ..**some_unary_bond_type};
+                for open_side_a in retained_species.ports.map.get(&some_binary_bond_type.pair_1).unwrap().union(&new_species.borrow().ports.map.get(&some_binary_bond_type.pair_1).unwrap()).into_iter() {
+                    for open_side_b in retained_species.ports.map.get(&some_binary_bond_type.pair_2).unwrap().union(&new_species.borrow().ports.map.get(&some_binary_bond_type.pair_2).unwrap()).into_iter() {
+                        let transformed_embed = self.interactions.get_mut(some_unary_bond_type).unwrap().set.take(&Rc::new(RefCell::new(BondEmbed{a_index: *open_side_a, b_index: *open_side_b, z: None, bond_type: **some_unary_bond_type}))).unwrap();
+                        assert!(self.interactions.get_mut(&some_binary_bond_type).unwrap().set.insert(transformed_embed), "This embed {} already cached as {}!", *transformed_embed.borrow(), some_binary_bond_type);
                     }
                 }
-                for free_head in self.species_annots.get(&retained_mark).unwrap().borrow().ports.p1_free.union(&self.species_annots.get(&ejected_mark).unwrap().borrow().ports.p1_free).into_iter() {
-                    for free_tail in self.species_annots.get(&ejected_mark).unwrap().borrow().ports.xp_free.union(&self.species_annots.get(&retained_mark).unwrap().borrow().ports.xp_free).into_iter() {
-                        match self.unary_binding_pairs.p1_xp.take(&(*free_head, *free_tail)) {
-                            Some((a_head, a_tail)) => {assert!(self.binary_binding_pairs.p1_xp.insert((a_head, a_tail)), "This pair already cached as binary!")},
-                            None => ()
-                        }
-                    }
-                }
-                for free_head in self.species_annots.get(&retained_mark).unwrap().borrow().ports.p2_free.union(&self.species_annots.get(&ejected_mark).unwrap().borrow().ports.p2_free).into_iter() {
-                    for free_tail in self.species_annots.get(&ejected_mark).unwrap().borrow().ports.xp_free.union(&self.species_annots.get(&retained_mark).unwrap().borrow().ports.xp_free).into_iter() {
-                        match self.unary_binding_pairs.p2_xp.take(&(*free_head, *free_tail)) {
-                            Some((a_head, a_tail)) => {assert!(self.binary_binding_pairs.p2_xp.insert((a_head, a_tail)), "This pair already cached as binary!")},
-                            None => ()
-                        }
-                    }
-                }
-                for free_head in self.species_annots.get(&retained_mark).unwrap().borrow().ports.p3_free.union(&self.species_annots.get(&ejected_mark).unwrap().borrow().ports.p3_free).into_iter() {
-                    for free_tail in self.species_annots.get(&ejected_mark).unwrap().borrow().ports.xp_free.union(&self.species_annots.get(&retained_mark).unwrap().borrow().ports.xp_free).into_iter() {
-                        match self.unary_binding_pairs.p3_xp.take(&(*free_head, *free_tail)) {
-                            Some((a_head, a_tail)) => {assert!(self.binary_binding_pairs.p3_xp.insert((a_head, a_tail)), "This pair already cached as binary!")},
-                            None => ()
-                        }
-                    }
-                }
-                for free_head in &self.species_annots.get(&retained_mark).unwrap().borrow().ports.pp_free {
-                    for free_tail in &self.species_annots.get(&ejected_mark).unwrap().borrow().ports.pp_free {
-                        match self.unary_binding_pairs.pp_pp.take(&(*free_head, *free_tail)) {
-                            Some((a_head, a_tail)) => {assert!(self.binary_binding_pairs.pp_pp.insert((a_head, a_tail)), "This pair already cached as binary!")},
-                            None => ()
-                        }
-                    }
-                }
-                assert!(self.ports.xh_free.insert(head_node), "This Axn head was already listed as free prior to this unbinding!");
-                assert!(self.ports.xt_free.insert(tail_node), "This Axn tail was already listed as free prior to this unbinding!");
-                assert!(self.species_annots.get(&head_node).unwrap().borrow_mut().ports.xh_free.insert(head_node), "This Axn head was already listed as free prior to this unbinding!");
-                assert!(self.species_annots.get(&tail_node).unwrap().borrow_mut().ports.xt_free.insert(tail_node), "This Axn tail was already listed as free prior to this unbinding!");
-                // bindings now possible due to the free'd sites
-                for tail in &self.species_annots.get(&head_node).unwrap().borrow().ports.xt_free {
-                    assert!(self.unary_binding_pairs.xh_xt.insert((head_node, *tail)), "This gained pair already cached into the unary tracker")}
-                for head in &self.species_annots.get(&tail_node).unwrap().borrow().ports.xh_free {
-                    assert!(self.unary_binding_pairs.xh_xt.insert((*head, tail_node)), "This gained pair already cached into the unary tracker")}
-                for tail in &self.ports.xt_free.difference(&self.species_annots.get(&head_node).unwrap().borrow().ports.xt_free).cloned().collect::<Vec<NodeIndex>>() {
-                    assert!(self.binary_binding_pairs.xh_xt.insert((head_node, *tail)), "This gained pair already cached into the binary tracker")}
-                self.binary_binding_pairs.xh_xt.remove(&(head_node, tail_node));    // hack to remove pair that will be visited from the other side in the next loop
-                for head in &self.ports.xh_free.difference(&self.species_annots.get(&tail_node).unwrap().borrow().ports.xh_free).cloned().collect::<Vec<NodeIndex>>() {
-                    assert!(self.binary_binding_pairs.xh_xt.insert((*head, tail_node)), "This gained pair already cached into the binary tracker")}
-                // self-edge cleanup
-                self.binary_binding_pairs.xh_xt.remove(&(head_node, head_node));
-                self.binary_binding_pairs.xh_xt.remove(&(tail_node, tail_node));
-                self.unary_binding_pairs.xh_xt.remove(&(head_node, head_node));
-                self.unary_binding_pairs.xh_xt.remove(&(tail_node, tail_node));
-            } else {panic!("This edge did not have a bond index!")}
-            self.update_mass_actions();
+            }
+            // binding opportunities now possible due to free'd sites
+            let head_species: Ref<MixtureSpecies> = self.species_annots.get(&head_node).unwrap().borrow();
+            let tail_species: Ref<MixtureSpecies> = self.species_annots.get(&head_node).unwrap().borrow();
+            let binary_binding_subtype = BondType{arity: InteractionArity::Binary, direction: InteractionDirection::Bind, ..bond_type};
+            for tail in &self.ports.map.get(&bond_type.pair_2).unwrap().difference(&tail_species.ports.map.get(&bond_type.pair_2).unwrap()).cloned().collect::<Vec<NodeIndex>>() {
+                assert!(self.interactions.get_mut(&binary_binding_subtype).unwrap().set.insert(Rc::new(RefCell::new(BondEmbed{a_index: head_node, b_index: *tail, z: None, bond_type: binary_binding_subtype}))), "This bond embed was already cached into the binary tracker!")
+            }
+            self.interactions.get_mut(&binary_binding_subtype).unwrap().set.remove(&Rc::new(RefCell::new(BondEmbed{a_index: head_node, b_index: tail_node, z: None, bond_type: binary_binding_subtype}))); // hack to remove the pair that will be visited from the other side in the next loop
+            for head in &self.ports.map.get(&bond_type.pair_1).unwrap().difference(&head_species.ports.map.get(&bond_type.pair_1).unwrap()).cloned().collect::<Vec<NodeIndex>>() {
+                assert!(self.interactions.get_mut(&binary_binding_subtype).unwrap().set.insert(Rc::new(RefCell::new(BondEmbed{a_index: *head, b_index: tail_node, z: None, bond_type: binary_binding_subtype}))), "This bond embed was already cached into the binary tracker!")
+            }
+            let unary_binding_subtype = BondType{arity: InteractionArity::Unary, direction: InteractionDirection::Bind, ..bond_type};
+            for tail in &head_species.ports.map.get(&bond_type.pair_2).unwrap().iter().cloned().collect::<Vec<NodeIndex>>() {
+                assert!(self.interactions.get_mut(&unary_binding_subtype).unwrap().set.insert(Rc::new(RefCell::new(BondEmbed{a_index: head_node, b_index: *tail, z: None, bond_type: unary_binding_subtype}))), "This bond embed was already cached into the unary tracker!")
+            }
+            for head in &tail_species.ports.map.get(&bond_type.pair_1).unwrap().iter().cloned().collect::<Vec<NodeIndex>>() {
+                assert!(self.interactions.get_mut(&unary_binding_subtype).unwrap().set.insert(Rc::new(RefCell::new(BondEmbed{a_index: *head, b_index: tail_node, z: None, bond_type: unary_binding_subtype}))), "This bond embed was already cached into the unary tracker!")
+            }
+            // self-edge cleanup; these may be present, or not, depending on the mixture state
+            self.interactions.get_mut(&binary_binding_subtype).unwrap().set.remove(&Rc::new(RefCell::new(BondEmbed{a_index: head_node, b_index: tail_node, z: None, bond_type: binary_binding_subtype})));
+            self.interactions.get_mut(&binary_binding_subtype).unwrap().set.remove(&Rc::new(RefCell::new(BondEmbed{a_index: tail_node, b_index: head_node, z: None, bond_type: binary_binding_subtype})));
+            self.interactions.get_mut(&unary_binding_subtype).unwrap().set.remove(&Rc::new(RefCell::new(BondEmbed{a_index: head_node, b_index: tail_node, z: None, bond_type: unary_binding_subtype})));
+            self.interactions.get_mut(&unary_binding_subtype).unwrap().set.remove(&Rc::new(RefCell::new(BondEmbed{a_index: tail_node, b_index: head_node, z: None, bond_type: unary_binding_subtype})));
         }
     /*
         /** Get a new copy of the mixture's rule activities. */
