@@ -933,13 +933,13 @@ pub mod reaction_mixture {
          * Break a bond that is a cycle member; this does not partition one species into two, it
          * simply reduces the internal connectivity of said species.
         */
-        pub fn unary_free(&mut self, target_bond: BondEmbed<'a>) {
-            let head_node: NodeIndex = target_bond.a_index;
-            let tail_node: NodeIndex = target_bond.b_index;
-            let bond_type: BondType<'a> = target_bond.bond_type;
-            let edge_index: EdgeIndex = target_bond.z.unwrap();
+        pub fn unary_free(&mut self, target_bond: Rc<RefCell<BondEmbed<'a>>>) {
+            let head_node: NodeIndex = target_bond.borrow().a_index;
+            let tail_node: NodeIndex = target_bond.borrow().b_index;
+            let bond_type: BondType<'a> = target_bond.borrow().bond_type;
+            let edge_index: EdgeIndex = target_bond.borrow().z.unwrap();
             // sanity check for reslient bond
-            assert!(self.universe_graph.edge_weight(edge_index).unwrap(), "This bond ({}) is not flagged as resilient; breaking it would not yield a still-connected component!", target_bond);
+            assert!(self.universe_graph.edge_weight(edge_index).unwrap(), "This bond ({}) is not flagged as resilient; breaking it would not yield a still-connected component!", target_bond.borrow());
             let mut target_species: RefMut<MixtureSpecies> = self.species_annots.get(&head_node).unwrap().borrow_mut();
             let old_last_edge_index = self.universe_graph.edge_indices().last().unwrap();
             self.universe_graph.remove_edge(edge_index).unwrap();
@@ -978,9 +978,8 @@ pub mod reaction_mixture {
                 Some(some_edge) if *some_edge == edge_index => &mut None,
                 _ => panic!("This node {} was not already bound at expected bond {}!", node_b, edge_index.index())
             };
-            let boxed_edge = Rc::new(RefCell::new(target_bond));
-            target_species.edges.remove(&boxed_edge);
-            assert!(self.interactions.get_mut(&bond_type).unwrap().set.remove(&boxed_edge), "Bond {} was not already present as an available option!", target_bond);
+            target_species.edges.remove(&target_bond);
+            assert!(self.interactions.get_mut(&bond_type).unwrap().set.remove(&target_bond), "Bond {} was not already present as an available option!", target_bond.borrow());
             assert!(self.ports.map.get_mut(&bond_type.pair_1).unwrap().insert(head_node), "Site {} on node {} was already listed as free prior to unbinding!", bond_type.pair_1, node_a);
             assert!(self.ports.map.get_mut(&bond_type.pair_2).unwrap().insert(tail_node), "Site {} on node {} was already listed as free prior to unbinding!", bond_type.pair_2, node_b);
             assert!(target_species.ports.map.get_mut(&bond_type.pair_1).unwrap().insert(head_node), "Site {} on node {} was already listed as free prior to this unbinding on the species cache!", bond_type.pair_1, node_a);
