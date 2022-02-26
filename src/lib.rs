@@ -66,7 +66,7 @@ pub mod primitives {
      * assert_eq!("x5:José(x[.], ÿ[3], z[.])", format!("{}", bar));
      * ```
     */
-    #[derive(Clone, Debug)]
+    #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
     pub struct Agent <'a> {
         pub name: &'a str,
         pub id: Option<NodeIndex>,
@@ -228,8 +228,8 @@ mod collectors {
     use petgraph::prelude::{NodeIndex};
     use rand::{distributions::WeightedIndex, prelude::*};
     use std::{cell::RefCell, collections::{HashSet, BTreeSet, BTreeMap}, cmp::Ordering, fmt, rc::Rc};
-    use crate::building_blocks::{InteractionData, ProtomerResources, RateFudge};
-    use crate::primitives::{AgentSite, BondEmbed, BondType, InteractionArity, InteractionDirection};
+    use crate::building_blocks::{InteractionData, ProtomerResources};
+    use crate::primitives::{Agent, AgentSite, BondEmbed, BondType, InteractionArity, InteractionDirection};
     
 
     /**
@@ -237,10 +237,15 @@ mod collectors {
     */
     #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
     pub struct MixtureSpecies <'a> {
-        pub size: usize,
-        pub agent_set: BTreeSet<NodeIndex>,
+        pub agent_set: BTreeSet<Rc<RefCell<Agent<'a>>>>,
         pub edges: BTreeSet<Rc<RefCell<BondEmbed<'a>>>>,
         pub ports: OpenPorts <'a>,
+    }
+
+    impl <'a> fmt::Display for MixtureSpecies <'a> {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "{}", self.agent_set.iter().map(|a| format!("{}", a.borrow())).join(", "))
+        }
     }
 
 
@@ -338,8 +343,6 @@ mod collectors {
     }
 
     
-
-
     /**
      * Convenience structure for calculating the activity of interactions, while keeping the bias
      * metrics & calculation separate.
@@ -509,7 +512,7 @@ mod collectors {
                 let borrowed_pair = pair.borrow();
                 let index_a: NodeIndex = borrowed_pair.a_index;
                 let index_b: NodeIndex = borrowed_pair.b_index;
-                self.activity_parameters.calculate_activity(species_annots.get(&index_a).unwrap().borrow().size, species_annots.get(&index_b).unwrap().borrow().size)
+                self.activity_parameters.calculate_activity(species_annots.get(&index_a).unwrap().borrow().agent_set.len(), species_annots.get(&index_b).unwrap().borrow().agent_set.len())
             };
             let embed_weights: Vec<f64> = self.set.iter().map(helper_closure).collect::<Vec<f64>>();
             embed_weights
@@ -545,20 +548,22 @@ mod collectors {
 
 
 pub mod reaction_mixture {
-    use crate::primitives::{Agent, AgentSite, BondType, BondEmbed, InteractionArity, InteractionDirection};
+    use crate::building_blocks::{InteractionData, ProtomerResources};
+    use crate::primitives::{Agent, BondType, BondEmbed, InteractionArity, InteractionDirection};
     use crate::collectors::{OpenPorts, MixtureSpecies, InteractingTracker};
     use petgraph::{graph::Graph, algo::astar::astar, prelude::*, visit::Dfs};
     use rand::{distributions::WeightedIndex, prelude::*};
     use std::cell::{RefCell, RefMut, Ref};
     use std::collections::{VecDeque, BTreeMap, BTreeSet};
     use std::rc::Rc;
+    use uuid::Uuid;
 
 
 
 
     pub struct Mixture <'a> {
         /// The graph that tracks connectivity; used for cycle detection & species partitioning.
-        universe_graph: Graph<Agent<'a>, bool, Undirected>,
+        universe_graph: Graph<Rc<RefCell<Agent<'a>>>, bool, Undirected>,
         
         /// Maps the species cache to each node in the graph.
         species_annots: BTreeMap<NodeIndex, Rc<RefCell<MixtureSpecies<'a>>>>,
@@ -578,6 +583,7 @@ pub mod reaction_mixture {
 
         simulated_time: f64,
         simulated_events: usize,
+        uuid: Uuid,
 
         /// Cache for the random number generator.
         simulator_rng: ThreadRng
@@ -621,142 +627,23 @@ pub mod reaction_mixture {
          * kappa-aware way.
         */
         pub fn to_kappa(&self) -> String {
-            let mut mixture_string: String = String::new();
-            mixture_string.push_str(&format!("// Snapshot [Event:{}]\n", self.simulated_events));
-            mixture_string.push_str(&format!("// Mixture has {} nodes and {} edges\n", self.universe_graph.node_count(), self.universe_graph.edge_count()));
-            mixture_string.push_str(&format!("%def: \"T0\" \"{}\"\n\n", self.simulated_time));
+            let mut mixture_vec: Vec<String> = Vec::with_capacity(self.species_set.len() + 3);
+            mixture_vec.push(format!("// Snapshot [Event:{}]\n// \"uuid\" : \"{}\"", self.simulated_events, self.uuid));
+            mixture_vec.push(format!("// Mixture has {} protomers and {} bonds in {} species", self.universe_graph.node_count(), self.universe_graph.edge_count(), self.species_set.len()));
+            mixture_vec.push(format!("%def: \"T0\" \"{}\"\n", self.simulated_time));
             let mut cloned_species = self.species_set.clone();
             cloned_species.make_contiguous().sort_by(|a, b| b.cmp(a));
-            for this_species_ref in cloned_species {
-                let this_species = this_species_ref.borrow();
-                let size_annot: String = format!("init: 1 /*{} agents*/ ", this_species.size);
-                let mut species_string: String = String::new();
-                species_string.push_str(&size_annot);
-                for agent_id_ref in &this_species.agent_set {
-                    let agent_id: NodeIndex = agent_id_ref.clone();
-                    let mut s = format!("x{}:", agent_id.index());
-                    let agent_str: String = match self.universe_graph.node_weight(agent_id).unwrap() {
-                        AgentType::AxnNode(x1, x2, xp) => {
-                            s.push_str("Axn(x1[");
-                            match x1 {
-                                Some(i) => s.push_str(i.index().to_string().as_str()),
-                                None => s.push_str(".")
-                            };
-                            s.push_str("], x2[");
-                            match x2 {
-                                Some(i) => s.push_str(i.index().to_string().as_str()),
-                                None => s.push_str(".")
-                            };
-                            s.push_str("], p[");
-                            match xp {
-                                Some(i) => s.push_str(i.index().to_string().as_str()),
-                                None => s.push_str(".")
-                            };
-                            s.push_str("]), ");
-                            s
-                        }
-                        AgentType::ApcNode(x1, x2, x3, pp) => {
-                            s.push_str("APC(ax1[");
-                            match x1 {
-                                Some(i) => s.push_str(i.index().to_string().as_str()),
-                                None => s.push_str(".")
-                            };
-                            s.push_str("], x2[");
-                            match x2 {
-                                Some(i) => s.push_str(i.index().to_string().as_str()),
-                                None => s.push_str(".")
-                            };
-                            s.push_str("], x3[");
-                            match x3 {
-                                Some(i) => s.push_str(i.index().to_string().as_str()),
-                                None => s.push_str(".")
-                            };
-                            s.push_str("], p[");
-                            match pp {
-                                Some(i) => s.push_str(i.index().to_string().as_str()),
-                                None => s.push_str(".")
-                            };
-                            s.push_str("]), ");
-                            s
-                        }
-                    };
-                    species_string.push_str(&agent_str);
-                }
-                mixture_string.push_str(species_string.strip_suffix(", ").unwrap());
-                mixture_string.push_str("\n");
+            for this_species in cloned_species {
+                mixture_vec.push(format!("init: 1 /*{} agents*/ {}", this_species.borrow().agent_set.len(), this_species.borrow()));
             }
-            mixture_string            
+            mixture_vec.join("\n")           
         }
 
         /**
          * Create a new mixture from a desired number of monomers, and desired rule rates.
         */
-        pub fn new_from_monomers(x_mass: usize, p_mass: usize, rule_rates: RuleRates) -> Mixture {
-            let mut net: Graph<AgentType, bool, Undirected> = Graph::with_capacity(x_mass + p_mass, x_mass * 3 + p_mass * 4);   // the universe graph
-            let mut spc: BTreeMap<NodeIndex, Rc<RefCell<MixtureSpecies>>> = BTreeMap::new();                                    // the global agent -> species map
-            let mut sps: VecDeque<Rc<RefCell<MixtureSpecies>>> = VecDeque::with_capacity(x_mass + p_mass);                      // the species set
-            let mut opr = OpenPorts::default_empty(x_mass, p_mass);                                                             // the open ports tracker
-            for _i in 0..x_mass {
-                let node_ix = net.add_node(AgentType::AxnNode(None, None, None));
-                let mut node_set = BTreeSet::new();
-                assert!(node_set.insert(node_ix));
-                let species_data = Rc::new(RefCell::new(MixtureSpecies{
-                    ports: OpenPorts::default_axn(node_ix),
-                    edges: EdgeTypes::default_empty(),
-                    size: 1,
-                    agent_set: node_set}));
-                assert_eq!(None, spc.insert(node_ix, Rc::clone(&species_data)));
-                sps.push_back(Rc::clone(&species_data));
-                opr.xh_free.insert(node_ix);
-                opr.xt_free.insert(node_ix);
-                opr.xp_free.insert(node_ix);
-            }
-            for _i in 0..p_mass {
-                let node_ix = net.add_node(AgentType::ApcNode(None, None, None, None));
-                let mut node_set = BTreeSet::new();
-                assert!(node_set.insert(node_ix));
-                let species_data = Rc::new(RefCell::new(MixtureSpecies{
-                    ports: OpenPorts::default_apc(node_ix),
-                    edges: EdgeTypes::default_empty(),
-                    size: 1,
-                    agent_set: node_set}));
-                assert_eq!(None, spc.insert(node_ix, Rc::clone(&species_data)));
-                sps.push_back(Rc::clone(&species_data));
-                opr.p1_free.insert(node_ix);
-                opr.p2_free.insert(node_ix);
-                opr.p3_free.insert(node_ix);
-                opr.pp_free.insert(node_ix);
-            }
-            let bbp = PossibleBondEmbeds::new_from_masses_binary(x_mass, p_mass);
-            let rac = RuleActivities {
-                axn_axn_u_bind: MassActionTerm{mass: 0, rate: rule_rates.axn_axn_u_bind}, // all monomeric: there are no unary binding opportunities
-                ap1_axn_u_bind: MassActionTerm{mass: 0, rate: rule_rates.ap1_axn_u_bind},
-                ap2_axn_u_bind: MassActionTerm{mass: 0, rate: rule_rates.ap2_axn_u_bind},
-                ap3_axn_u_bind: MassActionTerm{mass: 0, rate: rule_rates.ap3_axn_u_bind},
-                apc_apc_u_bind: MassActionTerm{mass: 0, rate: rule_rates.apc_apc_u_bind},
-                axn_axn_u_free: MassActionTerm{mass: 0, rate: rule_rates.axn_axn_u_free}, // all monomeric: no cycles to open
-                ap1_axn_u_free: MassActionTerm{mass: 0, rate: rule_rates.ap1_axn_u_free},
-                ap2_axn_u_free: MassActionTerm{mass: 0, rate: rule_rates.ap2_axn_u_free},
-                ap3_axn_u_free: MassActionTerm{mass: 0, rate: rule_rates.ap3_axn_u_free},
-                apc_apc_u_free: MassActionTerm{mass: 0, rate: rule_rates.apc_apc_u_free},
-                axn_axn_b_free: MassActionTerm{mass: 0, rate: rule_rates.axn_axn_b_free}, // all monomeric: no complexes to break apart
-                ap1_axn_b_free: MassActionTerm{mass: 0, rate: rule_rates.ap1_axn_b_free},
-                ap2_axn_b_free: MassActionTerm{mass: 0, rate: rule_rates.ap2_axn_b_free},
-                ap3_axn_b_free: MassActionTerm{mass: 0, rate: rule_rates.ap3_axn_b_free},
-                apc_apc_b_free: MassActionTerm{mass: 0, rate: rule_rates.apc_apc_b_free},
-                axn_axn_b_bind: MassActionTerm{mass: bbp.xh_xt.len(), rate: rule_rates.axn_axn_b_bind},
-                ap1_axn_b_bind: MassActionTerm{mass: bbp.p1_xp.len(), rate: rule_rates.ap1_axn_b_bind},
-                ap2_axn_b_bind: MassActionTerm{mass: bbp.p2_xp.len(), rate: rule_rates.ap2_axn_b_bind},
-                ap3_axn_b_bind: MassActionTerm{mass: bbp.p3_xp.len(), rate: rule_rates.ap3_axn_b_bind},
-                apc_apc_b_bind: MassActionTerm{mass: bbp.pp_pp.len(), rate: rule_rates.apc_apc_b_bind}
-            };
-            // bringing it all together
-            Mixture {universe_graph: net, species_annots: spc, ports: opr, rule_activities: rac, species_set: sps,
-                cycle_edges: EdgeTypes::default_empty(), tree_edges: EdgeTypes::default_empty(),  
-                unary_binding_pairs: PossibleBondEmbeds::new_from_masses_unary(x_mass, p_mass),
-                binary_binding_pairs: bbp,
-                edge_index_map: BTreeMap::new(), simulator_rng: rand::thread_rng(),
-                simulated_events: 0, simulated_time: 0.0}
+        pub fn new_from_monomers(resources: ProtomerResources, interactions: InteractionData) -> Mixture {
+            Mixture{}
         }
     
         /**
@@ -775,8 +662,8 @@ pub mod reaction_mixture {
             let new_edge_index = self.universe_graph.add_edge(head_index, tail_index, true);
             bond_type.direction = InteractionDirection::Free;
             target_bond.borrow_mut().z = Some(new_edge_index);
-            let agent_a: &mut Agent = self.universe_graph.node_weight_mut(head_index).unwrap();
-            let agent_b: &mut Agent = self.universe_graph.node_weight_mut(tail_index).unwrap();
+            let agent_a: RefMut<Agent> = self.universe_graph.node_weight_mut(head_index).unwrap().borrow_mut();
+            let agent_b: RefMut<Agent> = self.universe_graph.node_weight_mut(tail_index).unwrap().borrow_mut();
             let site_a = agent_a.sites.get_mut(bond_type.pair_1.site).unwrap();
             match site_a {
                 Some(_) => panic!("Node {} was already bound at {}!", agent_a, bond_type.pair_1.site),
@@ -885,22 +772,22 @@ pub mod reaction_mixture {
                 }
             }
             // recast from "head & tail" to "host & eaten"; iterate over smaller sets while merging caches
-            let (host_index, host_port_type, eaten_index, eaten_port_type) = if self.species_annots.get(&head_index).unwrap().borrow().size >= self.species_annots.get(&tail_index).unwrap().borrow().size {
+            let (host_index, host_port_type, eaten_index, eaten_port_type) = if self.species_annots.get(&head_index).unwrap().borrow().agent_set.len() >= self.species_annots.get(&tail_index).unwrap().borrow().agent_set.len() {
                 (head_index, bond_type.pair_1, tail_index, bond_type.pair_2)
             } else {
                 (tail_index, bond_type.pair_2, head_index, bond_type.pair_1)
             };
             let mut host_species: RefMut<MixtureSpecies> = self.species_annots.get(&host_index).unwrap().borrow_mut();
             let mut eaten_species: Rc<RefCell<MixtureSpecies>> = *self.species_annots.get(&eaten_index).unwrap();
-            let mut node_host: &mut Agent = self.universe_graph.node_weight_mut(host_index).unwrap();
-            let mut node_eaten: &mut Agent = self.universe_graph.node_weight_mut(eaten_index).unwrap();
+            let mut node_host: RefMut<Agent> = self.universe_graph.node_weight_mut(host_index).unwrap().borrow_mut();
+            let mut node_eaten: RefMut<Agent> = self.universe_graph.node_weight_mut(eaten_index).unwrap().borrow_mut();
             // create & update edge trackers
             assert!(self.interactions.get(&bond_type).unwrap().set.remove(&target_bond), "The target bond {} was not already in the expected tracker for {}!", target_bond.borrow(), bond_type);
             let new_edge_index = self.universe_graph.add_edge(head_index, tail_index, false);
             bond_type.direction = InteractionDirection::Free;
             target_bond.borrow_mut().z = Some(new_edge_index);
-            let agent_a: &mut Agent = self.universe_graph.node_weight_mut(head_index).unwrap();
-            let agent_b: &mut Agent = self.universe_graph.node_weight_mut(tail_index).unwrap();
+            let agent_a: RefMut<Agent> = self.universe_graph.node_weight_mut(head_index).unwrap().borrow_mut();
+            let agent_b: RefMut<Agent> = self.universe_graph.node_weight_mut(tail_index).unwrap().borrow_mut();
             let site_a = agent_a.sites.get_mut(bond_type.pair_1.site).unwrap();
             match site_a {
                 Some(_) => panic!("Node {} was already bound at {}!", agent_a, bond_type.pair_1.site),
@@ -918,14 +805,13 @@ pub mod reaction_mixture {
             self.species_set.make_contiguous().sort();
             let spec_ix: usize = self.species_set.binary_search(&eaten_species).unwrap();
             self.species_set.remove(spec_ix);
-            let indexes_of_eaten: BTreeSet<NodeIndex> = eaten_species.borrow().agent_set.clone();
+            let indexes_of_eaten: BTreeSet<NodeIndex> = eaten_species.borrow().agent_set.iter().map(|a| a.borrow().id.unwrap()).collect();
             for agent_index in indexes_of_eaten {
                 let new_ref = Rc::clone(&self.species_annots.get(&host_index).unwrap());
                 self.species_annots.entry(agent_index).and_modify(|e| {*e = new_ref});
             }
             host_species.ports.update_from(&eaten_species.borrow_mut().ports);
             host_species.edges.append(&mut eaten_species.borrow_mut().edges);
-            host_species.size += eaten_species.borrow().size;
             host_species.agent_set.append(&mut eaten_species.borrow_mut().agent_set);
         }
 
@@ -951,8 +837,8 @@ pub mod reaction_mixture {
             if old_last_edge_index != edge_index {
                 swapped_edge.borrow_mut().z = Some(edge_index);
                 let collateral_bond_type: BondType = swapped_edge.borrow().bond_type;
-                let collateral_agent_a: &mut Agent = self.universe_graph.node_weight_mut(swapped_edge.borrow().a_index).unwrap();
-                let collateral_agent_b: &mut Agent = self.universe_graph.node_weight_mut(swapped_edge.borrow().b_index).unwrap();
+                let collateral_agent_a: RefMut<Agent> = self.universe_graph.node_weight_mut(swapped_edge.borrow().a_index).unwrap().borrow_mut();
+                let collateral_agent_b: RefMut<Agent> = self.universe_graph.node_weight_mut(swapped_edge.borrow().b_index).unwrap().borrow_mut();
                 let collateral_site_a = collateral_agent_a.sites.get(collateral_bond_type.pair_1.site).unwrap();
                 let collateral_site_b = collateral_agent_b.sites.get(collateral_bond_type.pair_2.site).unwrap();
                 match collateral_site_a {
@@ -966,13 +852,13 @@ pub mod reaction_mixture {
                 *self.edge_index_map.get_mut(&edge_index).unwrap() = swapped_edge;
             }
             // sanity checks for bond breaking; then update bond indexes on the agent
-            let node_a: &mut Agent = self.universe_graph.node_weight_mut(head_node).unwrap();
+            let node_a: RefMut<Agent> = self.universe_graph.node_weight_mut(head_node).unwrap().borrow_mut();
             let site_a = node_a.sites.get_mut(bond_type.pair_1.site).unwrap();
             site_a = match site_a {
                 Some(some_edge) if *some_edge == edge_index => &mut None,
                 _ => panic!("This node {} was not already bound at expected bond {}!", node_a, edge_index.index())
             };
-            let node_b: &mut Agent = self.universe_graph.node_weight_mut(tail_node).unwrap();
+            let node_b: RefMut<Agent> = self.universe_graph.node_weight_mut(tail_node).unwrap().borrow_mut();
             let site_b = node_b.sites.get_mut(bond_type.pair_2.site).unwrap();
             site_b = match site_b {
                 Some(some_edge) if *some_edge == edge_index => &mut None,
@@ -1046,8 +932,8 @@ pub mod reaction_mixture {
             if old_last_edge_index != edge_index {
                 swapped_edge.borrow_mut().z = Some(edge_index);
                 let collateral_bond_type: BondType = swapped_edge.borrow().bond_type;
-                let collateral_agent_a: &mut Agent = self.universe_graph.node_weight_mut(swapped_edge.borrow().a_index).unwrap();
-                let collateral_agent_b: &mut Agent = self.universe_graph.node_weight_mut(swapped_edge.borrow().b_index).unwrap();
+                let collateral_agent_a: RefMut<Agent> = self.universe_graph.node_weight_mut(swapped_edge.borrow().a_index).unwrap().borrow_mut();
+                let collateral_agent_b: RefMut<Agent> = self.universe_graph.node_weight_mut(swapped_edge.borrow().b_index).unwrap().borrow_mut();
                 let collateral_site_a = collateral_agent_a.sites.get(collateral_bond_type.pair_1.site).unwrap();
                 let collateral_site_b = collateral_agent_b.sites.get(collateral_bond_type.pair_2.site).unwrap();
                 match collateral_site_a {
@@ -1061,13 +947,13 @@ pub mod reaction_mixture {
                 *self.edge_index_map.get_mut(&edge_index).unwrap() = swapped_edge;
             }
             // sanity checks for bond breaking; update bond indexes on the agent-type
-            let node_a: &mut Agent = self.universe_graph.node_weight_mut(head_node).unwrap();
+            let node_a: RefMut<Agent> = self.universe_graph.node_weight_mut(head_node).unwrap().borrow_mut();
             let site_a = node_a.sites.get_mut(bond_type.pair_1.site).unwrap();
             site_a = match site_a {
                 Some(some_edge) if *some_edge == edge_index => &mut None,
                 _ => panic!("This node {} was not already bound at expected bond {}!", node_a, edge_index.index())
             };
-            let node_b: &mut Agent = self.universe_graph.node_weight_mut(tail_node).unwrap();
+            let node_b: RefMut<Agent> = self.universe_graph.node_weight_mut(tail_node).unwrap().borrow_mut();
             let site_b = node_b.sites.get_mut(bond_type.pair_2.site).unwrap();
             site_b = match site_b {
                 Some(some_edge) if *some_edge == edge_index => &mut None,
@@ -1084,6 +970,8 @@ pub mod reaction_mixture {
             let mut dfs_tail = Dfs::new(&self.universe_graph, tail_node);
             let mut head_graph_indexes: BTreeSet<NodeIndex> = BTreeSet::new();
             let mut tail_graph_indexes: BTreeSet<NodeIndex> = BTreeSet::new();
+            let mut head_graph_agents: BTreeSet<Rc<RefCell<Agent<'a>>>> = BTreeSet::new();
+            let mut tail_graph_agents: BTreeSet<Rc<RefCell<Agent<'a>>>> = BTreeSet::new();
             let mut nx_head = dfs_head.next(&self.universe_graph);
             let mut nx_tail = dfs_tail.next(&self.universe_graph);
             loop {
@@ -1096,33 +984,37 @@ pub mod reaction_mixture {
                     },
                     (None, Some(_)) => {
                         // we've mapped-out the head node's graph; tail node's graph is the difference of original set minus this mapped-out set
-                        tail_graph_indexes = self.species_annots.get(&tail_node).unwrap().borrow().agent_set.difference(&head_graph_indexes).cloned().collect();
+                        head_graph_agents = head_graph_indexes.iter().map(|i| Rc::clone(self.universe_graph.node_weight(*i).unwrap())).collect::<BTreeSet<Rc<RefCell<Agent>>>>();
+                        tail_graph_agents = self.species_annots.get(&tail_node).unwrap().borrow().agent_set.difference(&head_graph_agents).cloned().collect();
                         break
                     },
                     (Some(_), None) => {
                         // we've mapped-out the tail node's graph
-                        head_graph_indexes = self.species_annots.get(&head_node).unwrap().borrow().agent_set.difference(&tail_graph_indexes).cloned().collect();
+                        tail_graph_agents = tail_graph_indexes.iter().map(|i| Rc::clone(self.universe_graph.node_weight(*i).unwrap())).collect::<BTreeSet<Rc<RefCell<Agent>>>>();
+                        head_graph_agents = self.species_annots.get(&head_node).unwrap().borrow().agent_set.difference(&tail_graph_agents).cloned().collect();
                         break
                     },
-                    (None, None) => break
+                    (None, None) => {
+                        head_graph_agents = head_graph_indexes.iter().map(|i| Rc::clone(self.universe_graph.node_weight(*i).unwrap())).collect::<BTreeSet<Rc<RefCell<Agent>>>>();
+                        tail_graph_agents = tail_graph_indexes.iter().map(|i| Rc::clone(self.universe_graph.node_weight(*i).unwrap())).collect::<BTreeSet<Rc<RefCell<Agent>>>>();
+                        break
+                    }
                 }
             }
-            let (ejected_mark, ejected_indexes, retained_mark, retained_indexes) =  // Iterate over small & lookup over big
-                if head_graph_indexes.len() >= tail_graph_indexes.len()
-                    {(head_node, head_graph_indexes, tail_node, tail_graph_indexes)}
+            let (ejected_mark, ejected_agents, ejected_indexes, retained_mark, retained_agents, retained_indexes) =  // Iterate over small & lookup over big
+                if head_graph_agents.len() >= tail_graph_agents.len()
+                    {(head_node, head_graph_agents, head_graph_indexes, tail_node, tail_graph_agents, tail_graph_indexes)}
                 else 
-                    {(tail_node, tail_graph_indexes, head_node, head_graph_indexes)};
+                    {(tail_node, tail_graph_agents, tail_graph_indexes, head_node, head_graph_agents, head_graph_indexes)};
             // create new species cache, in-place modify old species cache
             let retained_species: RefMut<MixtureSpecies> = self.species_annots.get_mut(&retained_mark).unwrap().borrow_mut();
             let ejected_ports: OpenPorts = retained_species.ports.eject_where(&ejected_indexes);
             let ejected_edges: BTreeSet<Rc<RefCell<BondEmbed>>> = retained_species.edges.drain_filter(|b| ejected_indexes.contains(&b.borrow().a_index)).collect();
-            retained_species.size -= &ejected_indexes.len();
-            retained_species.agent_set = retained_indexes;
+            retained_species.agent_set = retained_agents;
             let new_species = Rc::new(RefCell::new(MixtureSpecies{
                 ports: ejected_ports,
                 edges: ejected_edges,
-                size: ejected_indexes.len(),
-                agent_set: ejected_indexes.clone()
+                agent_set: ejected_agents.clone()
             }));
             // update the species trackers, per node index & global
             for node_index in &ejected_indexes {
