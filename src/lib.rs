@@ -902,8 +902,8 @@ pub mod reaction_mixture {
             } else {
                 (tail_index, bond_type.pair_2, head_index, bond_type.pair_1)
             };
-            let host_species: &Rc<RefCell<MixtureSpecies>> = self.species_annots.get(&host_index).unwrap();
-            let eaten_species: &Rc<RefCell<MixtureSpecies>> = self.species_annots.get(&eaten_index).unwrap();
+            let host_species: Rc<RefCell<MixtureSpecies>> = Rc::clone(self.species_annots.get(&host_index).unwrap());
+            let eaten_species: Rc<RefCell<MixtureSpecies>> = Rc::clone(self.species_annots.get(&eaten_index).unwrap());
             // create & update edge trackers
             assert!(self.interactions.get_mut(&bond_type).unwrap().set.remove(&target_bond), "The target bond {} was not already in the expected tracker for {}!", target_bond.borrow(), bond_type);
             let new_edge_index = self.universe_graph.add_edge(head_index, tail_index, false);
