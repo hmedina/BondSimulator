@@ -122,19 +122,6 @@ pub mod primitives {
 
     /**
      * Represents an agent in the reaction mixture.
-     * ```
-     * use axin_apc_simulator::primitives::Agent;
-     * let foo = Agent::new_from_signature("Bob", vec!["s1", "site_3", "s2"]);
-     * assert_eq!("Bob(s1[.], s2[.], site_3[.])", format!("{}", foo));
-     * ```
-     * Supports agent identifiers, and bond state.
-     * ```
-     * use axin_apc_simulator::primitives::Agent;
-     * use petgraph::prelude::NodeIndex;
-     * use std::collections::BTreeMap;
-     * let bar = Agent{name: "José", id: Some(NodeIndex::new(5)), sites: BTreeMap::new(("x", None), ("ÿ", EdgeIndex::new(3)), ("z", None))};
-     * assert_eq!("x5:José(x[.], ÿ[3], z[.])", format!("{}", bar));
-     * ```
     */
     #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
     pub struct Agent <'a> {
@@ -195,23 +182,23 @@ pub mod primitives {
      * Constructor orders alphabetically by the agent names, then by site names. This order is
      * observed for comparison and sorting.
      * ```
-     * use axin_apc_simulator::primitives::{BondType, InteractionArity, InteractionDirection};
-     * let bi_bi = BondType::new("Mango", "stone", "Earth", "ground", InteractionArity::Binary, InteractionDirection::Bind);
-     * assert_eq!("Earth(ground[.]) + Mango(stone[.]) -> Earth(ground[1]) , Mango(stone[1])", format!("{}", bi_bi));
-     * ```
-     * The interactions are displayed as:
-     * ```
-     * let un_bi = BondType::new("A", "b", "C", "d", InteractionArity::Unary, InteractionDirection::Bind);
-     * assert_eq!("A(b[.]) , C(d[.]) -> A(b[1]) , C(d[1])"", format!("{}", un_bi));
+     * use axin_apc_simulator::primitives::{AgentSite, BondType, InteractionArity, InteractionDirection};
+     * let foo = BondType::new(AgentSite{agent: "Mango", site: "stone"}, AgentSite{agent: "Earth", site: "ground"}, InteractionArity::Binary, InteractionDirection::Bind);
+     * assert_eq!("Earth(ground[.]) + Mango(stone[.]) -> Earth(ground[0]) , Mango(stone[0])", format!("{}", foo));
      *
-     * let bi_bi = BondType::new("A", "b", "C", "d", InteractionArity::Binary, InteractionDirection::Bind);
-     * assert_eq!("A(b[.]) + C(d[.]) -> A(b[1]) , C(d[1])"", format!("{}", bi_bi));
+     * /// The interactions are displayed as:
      * 
-     * let un_fr = BondType::new("A", "b", "C", "d", InteractionArity::Unary, InteractionDirection::Free);
-     * assert_eq!("A(b[1]) , C(d[1]) -> A(b[.]) , C(d[.])"", format!("{}", un_fr));
+     * let un_bi = BondType::new(AgentSite{agent: "A", site: "b"}, AgentSite{agent: "C", site: "d"}, InteractionArity::Unary, InteractionDirection::Bind);
+     * assert_eq!("A(b[.]) , C(d[.]) -> A(b[0]) , C(d[0])", format!("{}", un_bi));
      * 
-     * let bi_fr = BondType::new("A", "b", "C", "d", InteractionArity::Binary, InteractionDirection::Free);
-     * assert_eq!("A(b[1]) , C(d[1]) -> A(b[.]) + C(d[.])"", format!("{}", bi_fr));
+     * let un_fr = BondType::new(AgentSite{agent: "A", site: "b"}, AgentSite{agent: "C", site: "d"}, InteractionArity::Unary, InteractionDirection::Free);
+     * assert_eq!("A(b[0]) , C(d[0]) -> A(b[.]) , C(d[.])", format!("{}", un_fr));
+     *
+     * let bi_bi = BondType::new(AgentSite{agent: "A", site: "b"}, AgentSite{agent: "C", site: "d"}, InteractionArity::Binary, InteractionDirection::Bind);
+     * assert_eq!("A(b[.]) + C(d[.]) -> A(b[0]) , C(d[0])", format!("{}", bi_bi));
+     * 
+     * let bi_fr = BondType::new(AgentSite{agent: "A", site: "b"}, AgentSite{agent: "C", site: "d"}, InteractionArity::Binary, InteractionDirection::Free);
+     * assert_eq!("A(b[0]) , C(d[0]) -> A(b[.]) + C(d[.])", format!("{}", bi_fr));
      * ```
     */
     #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -224,7 +211,7 @@ pub mod primitives {
 
     impl fmt::Display for BondType <'_> {
         fn fmt(&self, f:&mut fmt::Formatter<'_>) -> fmt::Result {
-            write!(f, "{}", self.to_string_decorated(None, None, None))
+            write!(f, "{}", self.as_string_decorated(None, None, None))
         }
     }
 
@@ -237,7 +224,7 @@ pub mod primitives {
             }
         }
 
-        fn to_string_decorated(&self, agent_1_index: Option<NodeIndex>, agent_2_index: Option<NodeIndex>, bond_index: Option<EdgeIndex>) -> String {
+        fn as_string_decorated(&self, agent_1_index: Option<NodeIndex>, agent_2_index: Option<NodeIndex>, bond_index: Option<EdgeIndex>) -> String {
             let b: String = match bond_index {
                 Some(i) => i.index().to_string(),
                 None => String::from("0")
@@ -248,20 +235,20 @@ pub mod primitives {
                     InteractionArity::Unary => (".", &b[..], ",", ",")
                 }
                 InteractionDirection::Free => match self.arity {
-                    InteractionArity::Binary => (&b[..], ".", "+", ","),
+                    InteractionArity::Binary => (&b[..], ".", ",", "+"),
                     InteractionArity::Unary => (&b[..], ".", ",", ",")
                 }
             };
             let prefix_1: String = match agent_1_index {
-                Some(i) => format!("x{}:", i.index().to_string()),
+                Some(i) => format!("x{}:", i.index()),
                 None => String::from("")
             };
             let prefix_2: String = match agent_2_index {
-                Some(i) => format!("x{}:", i.index().to_string()),
+                Some(i) => format!("x{}:", i.index()),
                 None => String::from("")
             };
-            let lhs = format!("{}{}({}[{}]) {} x{}:{}({}[{}])", prefix_1, self.pair_1.agent, self.pair_1.site, pre_bond, pre_join, prefix_2, self.pair_2.agent, self.pair_2.site, pre_bond);
-            let rhs = format!("{}{}({}[{}]) {} x{}:{}({}[{}])", prefix_1, self.pair_1.agent, self.pair_1.site, post_bond, post_join, prefix_2, self.pair_2.agent, self.pair_2.site, post_bond);
+            let lhs = format!("{}{}({}[{}]) {} {}{}({}[{}])", prefix_1, self.pair_1.agent, self.pair_1.site, pre_bond, pre_join, prefix_2, self.pair_2.agent, self.pair_2.site, pre_bond);
+            let rhs = format!("{}{}({}[{}]) {} {}{}({}[{}])", prefix_1, self.pair_1.agent, self.pair_1.site, post_bond, post_join, prefix_2, self.pair_2.agent, self.pair_2.site, post_bond);
             format!("{} -> {}", &lhs, &rhs)
         }
     }
@@ -281,7 +268,7 @@ pub mod primitives {
     
     impl <'a> fmt::Display for BondEmbed <'a> {
         fn fmt(&self, f:&mut fmt::Formatter<'_>) -> fmt::Result {
-            write!(f, "{}", self.bond_type.to_string_decorated(Some(self.a_index), Some(self.b_index), self.z))
+            write!(f, "{}", self.bond_type.as_string_decorated(Some(self.a_index), Some(self.b_index), self.z))
         }
     }
 
