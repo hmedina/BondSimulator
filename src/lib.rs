@@ -640,6 +640,9 @@ mod collectors {
 }
 
 
+/**
+ * Module for the reaction mixture & its transformations.
+*/
 pub mod reaction_mixture {
     use crate::building_blocks::{ProtomerResources, AllInteractionData};
     use crate::primitives::{Agent, AgentSite, BondType, BondEmbed, InteractionArity, InteractionDirection};
@@ -711,12 +714,16 @@ pub mod reaction_mixture {
             let chosen_bond_type: BondType = *self.interactions.iter().nth(chosen_index).unwrap().0;
             let i = self.interactions.get_mut(&chosen_bond_type).unwrap();
             let bond: Rc<RefCell<BondEmbed>> = i.pick_targets(&mut self.simulator_rng, &self.species_annots);
+            println!("Chosen: {}", bond.borrow());
             match (chosen_bond_type.arity, chosen_bond_type.direction) {
                 (InteractionArity::Unary, InteractionDirection::Bind) => self.unary_bind(bond),
                 (InteractionArity::Unary, InteractionDirection::Free) => self.unary_free(bond),
                 (InteractionArity::Binary, InteractionDirection::Bind) => self.binary_bind(bond),
                 (InteractionArity::Binary, InteractionDirection::Free) => self.binary_free(bond)
             };
+            for i_data in self.interactions.values_mut() {
+                i_data.update_activity(&self.species_annots);
+            }
             self.advance_simulation_metrics();
         }
 
@@ -751,23 +758,13 @@ pub mod reaction_mixture {
             let simulated_events: usize = 0;
             let uuid: Uuid = Uuid::new_v4();
             let simulator_rng = rand::thread_rng();
-            // iterate over raw_interactions to populate interactions
-            for some_interaction in &raw_interactions.interactions {
-                let (pair_a, pair_b) = some_interaction.generate_agent_sites();
-                for ari in [InteractionArity::Binary, InteractionArity::Unary] {
-                    for dir in [InteractionDirection::Bind, InteractionDirection::Free] {
-                        let bond_type = BondType::new(pair_a, pair_b, ari, dir);
-                        let tracker = InteractingTracker::new_tracker(some_interaction, raw_abundances, ari, dir);
-                        interactions.insert(bond_type, tracker);
-                    }
-                }
-            }
             // iterate over raw_abundances to populate universe_graph, species_annots, species_set, and ports
             for (this_protomer, this_abundance) in &raw_abundances.map {
                 let site_set: BTreeSet<AgentSite> = raw_interactions.generate_agent_sites().drain_filter(|a| a.agent == this_protomer).collect();
-                let this_agent: Rc<RefCell<Agent>> = Rc::new(RefCell::new(Agent::new_from_agent_sites(this_protomer, &site_set)));
                 for _ix in 0..*this_abundance {
+                    let this_agent: Rc<RefCell<Agent>> = Rc::new(RefCell::new(Agent::new_from_agent_sites(this_protomer, &site_set)));
                     let node_ix: NodeIndex = universe_graph.add_node(Rc::clone(&this_agent));
+                    this_agent.borrow_mut().id = Some(node_ix);
                     let new_species = Rc::new(RefCell::new(MixtureSpecies {
                         agent_set: BTreeSet::from_iter([Rc::clone(&this_agent)]),
                         edges: BTreeSet::new(),
@@ -777,6 +774,18 @@ pub mod reaction_mixture {
                     species_set.push_back(Rc::clone(&new_species));
                     for some_site in &site_set {
                         ports.map.insert(*some_site, HashSet::from_iter([node_ix]));
+                    }
+                }
+            }
+            // iterate over raw_interactions to populate interactions
+            for some_interaction in &raw_interactions.interactions {
+                let (pair_a, pair_b) = some_interaction.generate_agent_sites();
+                for ari in [InteractionArity::Binary, InteractionArity::Unary] {
+                    for dir in [InteractionDirection::Bind, InteractionDirection::Free] {
+                        let bond_type = BondType::new(pair_a, pair_b, ari, dir);
+                        let mut tracker = InteractingTracker::new_tracker(some_interaction, raw_abundances, ari, dir);
+                        tracker.update_activity(&species_annots);
+                        interactions.insert(bond_type, tracker);
                     }
                 }
             }

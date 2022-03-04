@@ -1,67 +1,37 @@
+use axin_apc_simulator::building_blocks::{AllInteractionData, ProtomerResources};
+use axin_apc_simulator::reaction_mixture::Mixture;
 use clap::Parser;
 
 
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about=None)]
 struct Args {
-    /// Number of Axn-type protomers in the initial mix.
-    #[clap(short='x', long, default_value_t = 0)]
-    axn: usize,
+    /// Path to file with protomer abundances
+    #[clap(short='a', long, default_value = "./examples/APC_HUMAN--AXIN1_HUMAN--intestinal_crypt/Abundances_toy.json")]
+    abundances_path: String,
 
-    /// Number of APC-type protomers in the initial mix.
-    #[clap(short='p', long, default_value_t = 0)]
-    apc: usize,
+    /// Path to file with interaction data
+    #[clap(short='i', long, default_value = "./examples/APC_HUMAN--AXIN1_HUMAN--intestinal_crypt/Interactions.json")]
+    interactions_path: String,
 
-    /// Number of events to simulate.
-    #[clap(short, long, default_value_t = 10)]
-    events: usize,
-
-    /// Axn-Axn unary binding rate constant.
-    #[clap(long, default_value_t = 0.0)]
-    axn_axn_u_bind: f64,
-
-    /// Axn_Axn binary binding rate constant.
-    #[clap(long, default_value_t = 0.0)]
-    axn_axn_b_bind: f64,
-
-    /// Axn-Axn unary unbinding rate constant.
-    #[clap(long, default_value_t = 0.0)]
-    axn_axn_u_free: f64,
-
-    /// Axn_Axn binary unbinding rate constant.
-    #[clap(long, default_value_t = 0.0)]
-    axn_axn_b_free: f64
+    /// Number of events to simulate
+    #[clap(short='e', long, default_value_t = 1)]
+    requested_events: usize
 }
 
 fn main() {
-    let _args = Args::parse();
-    /*
-    let my_rates = RuleRates {
-        axn_axn_u_bind: args.axn_axn_u_bind,
-        axn_axn_b_bind: args.axn_axn_b_bind,
-        axn_axn_u_free: args.axn_axn_u_free,
-        axn_axn_b_free: args.axn_axn_b_free,
-        ap1_axn_u_bind: 0.0,
-        ap1_axn_b_bind: 0.0,
-        ap1_axn_u_free: 0.0,
-        ap1_axn_b_free: 0.0,
-        ap2_axn_u_bind: 0.0,
-        ap2_axn_b_bind: 0.0,
-        ap2_axn_u_free: 0.0,
-        ap2_axn_b_free: 0.0,
-        ap3_axn_u_bind: 0.0,
-        ap3_axn_b_bind: 0.0,
-        ap3_axn_u_free: 0.0,
-        ap3_axn_b_free: 0.0,
-        apc_apc_u_bind: 0.0,
-        apc_apc_b_bind: 0.0,
-        apc_apc_u_free: 0.0,
-        apc_apc_b_free: 0.0,
-    };
-    let mut my_mix = Mixture::new_from_monomers(args.axn, args.apc, my_rates);
-    for _ in 0..args.events {
-        my_mix.choose_and_apply_next_rule();
-    }
+    let args = Args::parse();
+    let raw_interactions: AllInteractionData = AllInteractionData::from_json(args.interactions_path).unwrap();
+    let raw_abundances: ProtomerResources = ProtomerResources::from_json(args.abundances_path).unwrap();
+   
+    let mut my_mix = Mixture::new_monomeric_from(&raw_abundances, &raw_interactions);
     println!("{}", my_mix.to_kappa());
-    */
+    my_mix.choose_and_apply_next_rule();
+    println!("{}", my_mix.to_kappa());
+    
+    
+    //for _ in 0..args.requested_events {
+    //    my_mix.choose_and_apply_next_rule();
+    //}
+    //println!("{}", my_mix.to_kappa());
 }
