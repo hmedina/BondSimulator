@@ -1,4 +1,4 @@
-#![feature(hash_drain_filter, btree_drain_filter)]
+#![feature(hash_drain_filter, btree_drain_filter, map_first_last)]
 #![warn(clippy::all)]
 
 /**
@@ -417,9 +417,9 @@ mod collectors {
         /**
          * Constructor for the smallest species.
         */
-        pub fn new_monomer(agent_sites: &BTreeSet<AgentSite<'a>>) -> Self {
+        pub fn new_monomer(agent_sites: &BTreeSet<AgentSite<'a>>, index: &NodeIndex) -> Self {
             OpenPorts {
-                map: BTreeMap::from_iter(agent_sites.iter().map(|n| (*n, HashSet::new())))
+                map: BTreeMap::from_iter(agent_sites.iter().map(|n| (*n, HashSet::from_iter([*index]))))
             }
         }
 
@@ -537,8 +537,8 @@ mod collectors {
          * empty, but pre-allocated.
         */
         pub fn new_tracker(interaction: &'a InteractionData, resources: &'a ProtomerResources, arity: InteractionArity, direction: InteractionDirection) -> Self {
-            let mut index_offset = 0;
-            let (pair_a, pair_b) = interaction.generate_agent_sites();          // this provides sorted names
+            let (pair_a, pair_b) = interaction.generate_agent_sites();          // this provides sorted names, which is key for the tandem-build of this tracker with the universe_graph keeping indexing in sync
+            let mut index_offset: usize = resources.map.range(..String::from(pair_a.agent)).map(|i| *i.1).sum();   // cumulative sum of previous agents
             let bond_type = BondType::new(pair_a, pair_b, arity, direction);
             let mut set: BTreeSet<Rc<RefCell<BondEmbed>>> = BTreeSet::new();
             let (activity_parameters, activity_calculated) = match (arity, direction) {
@@ -632,9 +632,12 @@ mod collectors {
     impl <'a> fmt::Display for InteractingTracker <'a> {
         fn fmt(&self, f:&mut fmt::Formatter<'_>) -> fmt::Result {
             let bond_instances_closure = |input_set: &BTreeSet<Rc<RefCell<BondEmbed>>>| -> String {
-                input_set.iter().map(|b| format!("{}", b.borrow())).collect::<Vec<String>>().join("\n\t")
+                input_set.iter().map(|b| format!("{}", b.borrow())).collect::<Vec<String>>().join("\n")
             };
-            write!(f, "{}", bond_instances_closure(&self.set))
+            let header: String = 
+                if !self.set.is_empty() { format!("\t{}:\n", self.set.first().unwrap().borrow().bond_type)}
+                else { String::from("[empty interaction set]") };
+            write!(f, "{}{}", header, bond_instances_closure(&self.set))
         }
     }
 }
@@ -768,12 +771,12 @@ pub mod reaction_mixture {
                     let new_species = Rc::new(RefCell::new(MixtureSpecies {
                         agent_set: BTreeSet::from_iter([Rc::clone(&this_agent)]),
                         edges: BTreeSet::new(),
-                        ports: OpenPorts::new_monomer(&site_set)
+                        ports: OpenPorts::new_monomer(&site_set, &node_ix)
                     }));
                     species_annots.insert(node_ix, Rc::clone(&new_species));
                     species_set.push_back(Rc::clone(&new_species));
                     for some_site in &site_set {
-                        ports.map.insert(*some_site, HashSet::from_iter([node_ix]));
+                        ports.map.entry(*some_site).or_insert_with(HashSet::new).insert(node_ix);
                     }
                 }
             }
@@ -895,25 +898,20 @@ pub mod reaction_mixture {
                 let mut head_species: RefMut<MixtureSpecies> = self.species_annots.get(&head_index).unwrap().borrow_mut();
                 let mut tail_species: RefMut<MixtureSpecies> = self.species_annots.get(&tail_index).unwrap().borrow_mut();
                 // bindings no longer possible due to occupied sites
-                let mut binary_combinatorics_lost: BTreeSet<BondEmbed> = BTreeSet::new();
-                for open_tail in &self.ports.map.get(&bond_type.pair_2).unwrap().difference(head_species.ports.map.get(&bond_type.pair_2).unwrap()).cloned().collect::<Vec<NodeIndex>>() {
-                    let b = self.interactions.get_mut(&bond_type).unwrap().set.take(&Rc::new(RefCell::new(BondEmbed{a_index: head_index, b_index: *open_tail, z: None, bond_type}))).unwrap();
-                    assert!(binary_combinatorics_lost.insert(*b.borrow()), "This lost binary pair ({}, {}) already cached into the binary lost tracker!", head_index.index(), open_tail.index())
-                }
-                for open_head in &self.ports.map.get(&bond_type.pair_1).unwrap().difference(head_species.ports.map.get(&bond_type.pair_1).unwrap()).cloned().collect::<Vec<NodeIndex>>() {
-                    let b = self.interactions.get_mut(&bond_type).unwrap().set.take(&Rc::new(RefCell::new(BondEmbed{a_index: *open_head, b_index: tail_index, z: None, bond_type}))).unwrap();
-                    assert!(binary_combinatorics_lost.insert(*b.borrow()), "This lost binary pair ({}, {}) already cached into the binary lost tracker!", open_head.index(), tail_index.index())
-                }
-                let mut unary_combinatorics_lost: BTreeSet<BondEmbed> = BTreeSet::new();
-                let purged_type = BondType{arity: InteractionArity::Unary, ..bond_type};
-                for open_tail in head_species.ports.map.get(&bond_type.pair_2).unwrap().iter().collect::<Vec<&NodeIndex>>() {
-                    let b = self.interactions.get_mut(&purged_type).unwrap().set.take(&Rc::new(RefCell::new(BondEmbed{a_index: head_index, b_index: *open_tail, z: None, bond_type: purged_type}))).unwrap();
-                    assert!(unary_combinatorics_lost.insert(*b.borrow()), "This lost unary pair ({}, {}) already cached into the unary lost tracker!", head_index.index(), open_tail.index())
-                }
-                for open_head in tail_species.ports.map.get(&bond_type.pair_1).unwrap().iter().collect::<Vec<&NodeIndex>>() {
-                    let b = self.interactions.get_mut(&purged_type).unwrap().set.take(&Rc::new(RefCell::new(BondEmbed{a_index: *open_head, b_index: tail_index, z: None, bond_type: purged_type}))).unwrap();
-                    assert!(unary_combinatorics_lost.insert(*b.borrow()), "This lost unary pair ({}, {}) already cached into the unary lost tracker!", open_head.index(), tail_index.index())
-                }
+                let mirr_type = BondType{arity: InteractionArity::Unary, ..bond_type};
+                let bi_combinatorics_lost: BTreeSet<Rc<RefCell<BondEmbed>>>;
+                let un_combinatorics_lost: BTreeSet<Rc<RefCell<BondEmbed>>>;
+                (bi_combinatorics_lost, un_combinatorics_lost) = if bond_type.pair_1 == bond_type.pair_2 {
+                    (
+                        self.interactions.get_mut(&bond_type).unwrap().set.drain_filter(|b| b.borrow().a_index == head_index || b.borrow().b_index == tail_index || b.borrow().a_index == tail_index || b.borrow().b_index == head_index).collect(),
+                        self.interactions.get_mut(&mirr_type).unwrap().set.drain_filter(|b| b.borrow().a_index == head_index || b.borrow().b_index == tail_index || b.borrow().a_index == tail_index || b.borrow().b_index == head_index).collect()
+                    )
+                } else {
+                    (
+                        self.interactions.get_mut(&bond_type).unwrap().set.drain_filter(|b| b.borrow().a_index == head_index || b.borrow().b_index == tail_index).collect(),
+                        self.interactions.get_mut(&mirr_type).unwrap().set.drain_filter(|b| b.borrow().a_index == head_index || b.borrow().b_index == tail_index).collect()
+                    )
+                };
                 assert!(self.ports.map.get_mut(&bond_type.pair_1).unwrap().remove(&head_index), "This head node was not globally listed as free already, can't bind to it!");
                 assert!(self.ports.map.get_mut(&bond_type.pair_2).unwrap().remove(&tail_index), "This tail node was not globally listed as free already, can't bind to it!");
                 assert!(head_species.ports.map.get_mut(&bond_type.pair_1).unwrap().remove(&head_index), "Port {} on index {} was not listed as free in-species already, can't bind to it!", bond_type.pair_1, head_index.index());
@@ -938,7 +936,6 @@ pub mod reaction_mixture {
             let host_species: Rc<RefCell<MixtureSpecies>> = Rc::clone(self.species_annots.get(&host_index).unwrap());
             let eaten_species: Rc<RefCell<MixtureSpecies>> = Rc::clone(self.species_annots.get(&eaten_index).unwrap());
             // create & update edge trackers
-            assert!(self.interactions.get_mut(&bond_type).unwrap().set.remove(&target_bond), "The target bond {} was not already in the expected tracker for {}!", target_bond.borrow(), bond_type);
             let new_edge_index = self.universe_graph.add_edge(head_index, tail_index, false);
             bond_type.direction = InteractionDirection::Free;
             target_bond.borrow_mut().z = Some(new_edge_index);
