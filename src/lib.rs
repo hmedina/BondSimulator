@@ -1203,6 +1203,9 @@ pub mod reaction_mixture {
                 self.species_annots.entry(*node_index).and_modify(|e| {*e = Rc::clone(&new_species)});
             }
             self.species_set.push_back(Rc::clone(&new_species));
+            // rephrasing operations to use types: head & tail
+            let head_species: Ref<MixtureSpecies> = self.species_annots.get(&head_index).unwrap().borrow();
+            let tail_species: Ref<MixtureSpecies> = self.species_annots.get(&tail_index).unwrap().borrow();
             let unary_binding_types: Vec<BondType> = self.interactions.keys().filter(|b| b.arity == InteractionArity::Unary && b.direction == InteractionDirection::Bind).cloned().collect();
             for some_uni_bond_type in unary_binding_types {
                 let some_bin_bond_type: BondType = BondType{arity: InteractionArity::Binary, ..some_uni_bond_type};
@@ -1216,38 +1219,45 @@ pub mod reaction_mixture {
                     embed.borrow_mut().bond_type = some_bin_bond_type;
                 }
                 self.interactions.get_mut(&some_bin_bond_type).unwrap().set.append(&mut transformed_embeds);
+                // binary bindings now possible due to free'd sites
+                let mut bin_combinatorics_gained: BTreeSet<Rc<RefCell<BondEmbed>>> = BTreeSet::new();
+                let heads_outside_tail: HashSet<&NodeIndex> = self.ports.map.get(&some_bin_bond_type.pair_1).unwrap().difference(tail_species.ports.map.get(&some_bin_bond_type.pair_1).unwrap()).collect();
+                let tails_outside_head: HashSet<&NodeIndex> = self.ports.map.get(&some_bin_bond_type.pair_2).unwrap().difference(head_species.ports.map.get(&some_bin_bond_type.pair_2).unwrap()).collect();
+                println!("For {}, sets are:\nheads {:?}\ntails {:?}", some_bin_bond_type, heads_outside_tail, tails_outside_head);
+                if bond_type.pair_1 == some_bin_bond_type.pair_1 {
+                    println!("{} and {} were equal", bond_type.pair_1, some_bin_bond_type.pair_1);
+                    for tail in tails_outside_head {
+                        let bond_embed = BondEmbed{a_index: head_index, b_index: *tail, bond_type: some_bin_bond_type, z: None};
+                        bin_combinatorics_gained.insert(Rc::new(RefCell::new(bond_embed)));
+                    }
+                }
+                if bond_type.pair_2 == some_bin_bond_type.pair_2 {
+                    for head in heads_outside_tail {
+                        let bond_embed = BondEmbed{a_index: *head, b_index: tail_index, bond_type: some_bin_bond_type, z: None};
+                        bin_combinatorics_gained.insert(Rc::new(RefCell::new(bond_embed)));
+                    }
+                }
+                // unary bindings now possible due to free'd sites
+                let mut uni_combinatorics_gained: BTreeSet<Rc<RefCell<BondEmbed>>> = BTreeSet::new();
+                let mut heads_in_tail: HashSet<&NodeIndex> = tail_species.ports.map.get(&some_uni_bond_type.pair_1).unwrap().iter().clone().collect();
+                let mut tails_in_head: HashSet<&NodeIndex> = head_species.ports.map.get(&some_uni_bond_type.pair_2).unwrap().iter().clone().collect();
+                if bond_type.pair_1 == some_uni_bond_type.pair_1 {
+                    if bond_type.pair_1 == bond_type.pair_2 {tails_in_head.remove(&tail_index);}
+                    for tail in tails_in_head {
+                        let bond_embed = BondEmbed{a_index: head_index, b_index: *tail, bond_type: some_uni_bond_type, z: None};
+                        assert!(uni_combinatorics_gained.insert(Rc::new(RefCell::new(bond_embed))), "Embed {} already cached into the unary-gained temp. tracker!", bond_embed);
+                    }
+                }
+                if bond_type.pair_2 == some_uni_bond_type.pair_2 {
+                    if bond_type.pair_1 == bond_type.pair_2 {heads_in_tail.remove(&head_index);}
+                    for head in heads_in_tail {
+                        let bond_embed = BondEmbed{a_index: *head, b_index: tail_index, bond_type: some_uni_bond_type, z: None};
+                        assert!(uni_combinatorics_gained.insert(Rc::new(RefCell::new(bond_embed))), "Embed {} already cached into the unary-gained temp. tracker!", bond_embed);
+                    }
+                }
+                self.interactions.get_mut(&some_bin_bond_type).unwrap().set.append(&mut bin_combinatorics_gained);
+                self.interactions.get_mut(&some_uni_bond_type).unwrap().set.append(&mut uni_combinatorics_gained);
             }
-            // bindings now possible due to free'd sites
-            let head_species: Ref<MixtureSpecies> = self.species_annots.get(&head_index).unwrap().borrow();
-            let tail_species: Ref<MixtureSpecies> = self.species_annots.get(&tail_index).unwrap().borrow();
-            let bin_binding_subtype = BondType{direction: InteractionDirection::Bind, ..bond_type};
-            let uni_binding_subtype = BondType{direction: InteractionDirection::Bind, arity: InteractionArity::Unary, ..bond_type};
-            let mut bin_combinatorics_gained: BTreeSet<Rc<RefCell<BondEmbed>>> = BTreeSet::new();
-            let mut uni_combinatorics_gained: BTreeSet<Rc<RefCell<BondEmbed>>> = BTreeSet::new();
-            for tail in self.ports.map.get(&bond_type.pair_2).unwrap().difference(head_species.ports.map.get(&bond_type.pair_2).unwrap()) {
-                let bond_embed = BondEmbed{a_index: head_index, b_index: *tail, bond_type: bin_binding_subtype, z: None};
-                bin_combinatorics_gained.insert(Rc::new(RefCell::new(bond_embed)));
-            }
-            for head in self.ports.map.get(&bond_type.pair_1).unwrap().difference(tail_species.ports.map.get(&bond_type.pair_1).unwrap()) {
-                let bond_embed = BondEmbed{a_index: *head, b_index: tail_index, bond_type: bin_binding_subtype, z: None};
-                bin_combinatorics_gained.insert(Rc::new(RefCell::new(bond_embed)));
-            }
-            let mut heads_in_tail: HashSet<&NodeIndex> = tail_species.ports.map.get(&bond_type.pair_1).unwrap().iter().clone().collect();
-            let mut tails_in_head: HashSet<&NodeIndex> = head_species.ports.map.get(&bond_type.pair_2).unwrap().iter().clone().collect();
-            if bond_type.pair_1 == bond_type.pair_2 {
-                heads_in_tail.remove(&tail_index);
-                tails_in_head.remove(&head_index);
-            }
-            for tail in tails_in_head {
-                let bond_embed = BondEmbed{a_index: head_index, b_index: *tail, bond_type: uni_binding_subtype, z: None};
-                assert!(uni_combinatorics_gained.insert(Rc::new(RefCell::new(bond_embed))), "Embed {} already cached into the unary-gained temp. tracker!", bond_embed);
-            }
-            for head in heads_in_tail {
-                let bond_embed = BondEmbed{a_index: *head, b_index: tail_index, bond_type: uni_binding_subtype, z: None};
-                assert!(uni_combinatorics_gained.insert(Rc::new(RefCell::new(bond_embed))), "Embed {} already cached into the unary-gained temp. tracker!", bond_embed);
-            }
-            self.interactions.get_mut(&bin_binding_subtype).unwrap().set.append(&mut bin_combinatorics_gained);
-            self.interactions.get_mut(&uni_binding_subtype).unwrap().set.append(&mut uni_combinatorics_gained);
         }
 
         /** 
