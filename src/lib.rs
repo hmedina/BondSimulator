@@ -1297,7 +1297,7 @@ pub mod reaction_mixture {
         pub fn print_activities(&self) {
             let mut str_vec: Vec<String> = Vec::new();
             for (i_name, i_data) in &self.interactions {
-                str_vec.push(format!("{}\t\t{}", i_data.activity_calculated, i_name))
+                str_vec.push(format!("{:.4e}\t\t{}", i_data.activity_calculated, i_name))
             }
             println!("Rule activities:\n{}", str_vec.join("\n"))
         }
