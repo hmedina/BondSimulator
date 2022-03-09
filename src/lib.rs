@@ -1061,37 +1061,46 @@ pub mod reaction_mixture {
                 let unary_binding_types: Vec<BondType> = self.interactions.keys().filter(|b| b.arity == InteractionArity::Unary && b.direction == InteractionDirection::Bind).cloned().collect();
                 for some_uni_bond_type in unary_binding_types {
                     let some_bin_bond_type: BondType = BondType{arity: InteractionArity::Binary, ..some_uni_bond_type};
-                    // binary bindings now possible due to free'd sites
+                    // bindings now possible due to free'd sites
+                    let mut heads_in_target: HashSet<NodeIndex> = 
+                        if target_species.ports.map.contains_key(&some_uni_bond_type.pair_1) {
+                            target_species.ports.map.get(&some_uni_bond_type.pair_1).unwrap().iter().copied().collect()
+                        } else { HashSet::new() };
+                    let mut tails_in_target: HashSet<NodeIndex> = 
+                        if target_species.ports.map.contains_key(&some_uni_bond_type.pair_2) {
+                            target_species.ports.map.get(&some_uni_bond_type.pair_2).unwrap().iter().copied().collect()
+                        } else { HashSet::new() };
+                    let heads_outside_target: HashSet<NodeIndex> = self.ports.map.get(&some_bin_bond_type.pair_1).unwrap().difference(&heads_in_target).copied().collect();
+                    let tails_outside_target: HashSet<NodeIndex> = self.ports.map.get(&some_bin_bond_type.pair_2).unwrap().difference(&tails_in_target).copied().collect();
+                    // binary combinatorics
                     let mut bin_combinatorics_gained: BTreeSet<Rc<RefCell<BondEmbed>>> = BTreeSet::new();
-                    let heads_outside_target: HashSet<&NodeIndex> = self.ports.map.get(&some_bin_bond_type.pair_1).unwrap().difference(target_species.ports.map.get(&some_bin_bond_type.pair_1).unwrap()).collect();
-                    let tails_outside_target: HashSet<&NodeIndex> = self.ports.map.get(&some_bin_bond_type.pair_2).unwrap().difference(target_species.ports.map.get(&some_bin_bond_type.pair_2).unwrap()).collect();
                     if bond_type.pair_1 == some_bin_bond_type.pair_1 {
                         for tail in tails_outside_target {
-                            let bond_embed = BondEmbed{a_index: head_index, b_index: *tail, bond_type: some_bin_bond_type, z: None};
+                            let bond_embed = BondEmbed{a_index: head_index, b_index: tail, bond_type: some_bin_bond_type, z: None};
                             bin_combinatorics_gained.insert(Rc::new(RefCell::new(bond_embed)));
                         }
                     }
                     if bond_type.pair_2 == some_bin_bond_type.pair_2 {
                         for head in heads_outside_target {
-                            let bond_embed = BondEmbed{a_index: *head, b_index: tail_index, bond_type: some_bin_bond_type, z: None};
+                            let bond_embed = BondEmbed{a_index: head, b_index: tail_index, bond_type: some_bin_bond_type, z: None};
                             bin_combinatorics_gained.insert(Rc::new(RefCell::new(bond_embed)));
                         }
                     }
-                    // unary bindings now possible due to free'd sites
+                    // unary combinatorics
                     let mut uni_combinatorics_gained: BTreeSet<Rc<RefCell<BondEmbed>>> = BTreeSet::new();
-                    let mut heads_in_target: HashSet<&NodeIndex> = target_species.ports.map.get(&some_uni_bond_type.pair_1).unwrap().iter().clone().collect();
-                    let mut tails_in_target: HashSet<&NodeIndex> = target_species.ports.map.get(&some_uni_bond_type.pair_2).unwrap().iter().clone().collect();
                     if bond_type.pair_1 == some_uni_bond_type.pair_1 {
-                        if bond_type.pair_1 == bond_type.pair_2 {tails_in_target.remove(&tail_index);}
+                        if bond_type.pair_1 == bond_type.pair_2 {tails_in_target.remove(&head_index);}
+                        if bond_type.pair_1.agent == bond_type.pair_2.agent {tails_in_target.remove(&head_index);}
                         for tail in tails_in_target {
-                            let bond_embed = BondEmbed{a_index: head_index, b_index: *tail, bond_type: some_uni_bond_type, z: None};
+                            let bond_embed = BondEmbed{a_index: head_index, b_index: tail, bond_type: some_uni_bond_type, z: None};
                             uni_combinatorics_gained.insert(Rc::new(RefCell::new(bond_embed)));
                         }
                     }
                     if bond_type.pair_2 == some_uni_bond_type.pair_2 {
-                        if bond_type.pair_1 == bond_type.pair_2 {heads_in_target.remove(&head_index);}
+                        if bond_type.pair_1 == bond_type.pair_2 {heads_in_target.remove(&tail_index);}
+                        if bond_type.pair_1.agent == bond_type.pair_2.agent {heads_in_target.remove(&tail_index);}
                         for head in heads_in_target {
-                            let bond_embed = BondEmbed{a_index: *head, b_index: tail_index, bond_type: some_uni_bond_type, z: None};
+                            let bond_embed = BondEmbed{a_index: head, b_index: tail_index, bond_type: some_uni_bond_type, z: None};
                             uni_combinatorics_gained.insert(Rc::new(RefCell::new(bond_embed)));
                         }
                     }
@@ -1270,37 +1279,44 @@ pub mod reaction_mixture {
                     embed.borrow_mut().bond_type = some_bin_bond_type;
                 }
                 self.interactions.get_mut(&some_bin_bond_type).unwrap().set.append(&mut transformed_embeds);
-                // binary bindings now possible due to free'd sites
+                // bindings now possible due to free'd sites
+                let mut heads_in_tail: HashSet<NodeIndex> = 
+                    if tail_species.ports.map.contains_key(&some_uni_bond_type.pair_1) {
+                        tail_species.ports.map.get(&some_uni_bond_type.pair_1).unwrap().iter().copied().collect()
+                    } else { HashSet::new() };
+                let mut tails_in_head: HashSet<NodeIndex> = 
+                    if head_species.ports.map.contains_key(&some_uni_bond_type.pair_2) {
+                        head_species.ports.map.get(&some_uni_bond_type.pair_2).unwrap().iter().copied().collect()
+                    } else { HashSet::new() };
+                let heads_outside_tail: HashSet<NodeIndex> = self.ports.map.get(&some_bin_bond_type.pair_1).unwrap().difference(&heads_in_tail).copied().collect();
+                let tails_outside_head: HashSet<NodeIndex> = self.ports.map.get(&some_bin_bond_type.pair_2).unwrap().difference(&tails_in_head).copied().collect();
+                // binary combinatorics
                 let mut bin_combinatorics_gained: BTreeSet<Rc<RefCell<BondEmbed>>> = BTreeSet::new();
-                let heads_outside_tail: HashSet<&NodeIndex> = self.ports.map.get(&some_bin_bond_type.pair_1).unwrap().difference(tail_species.ports.map.get(&some_bin_bond_type.pair_1).unwrap()).collect();
-                let tails_outside_head: HashSet<&NodeIndex> = self.ports.map.get(&some_bin_bond_type.pair_2).unwrap().difference(head_species.ports.map.get(&some_bin_bond_type.pair_2).unwrap()).collect();
                 if bond_type.pair_1 == some_bin_bond_type.pair_1 {
                     for tail in tails_outside_head {
-                        let bond_embed = BondEmbed{a_index: head_index, b_index: *tail, bond_type: some_bin_bond_type, z: None};
+                        let bond_embed = BondEmbed{a_index: head_index, b_index: tail, bond_type: some_bin_bond_type, z: None};
                         bin_combinatorics_gained.insert(Rc::new(RefCell::new(bond_embed)));
                     }
                 }
                 if bond_type.pair_2 == some_bin_bond_type.pair_2 {
                     for head in heads_outside_tail {
-                        let bond_embed = BondEmbed{a_index: *head, b_index: tail_index, bond_type: some_bin_bond_type, z: None};
+                        let bond_embed = BondEmbed{a_index: head, b_index: tail_index, bond_type: some_bin_bond_type, z: None};
                         bin_combinatorics_gained.insert(Rc::new(RefCell::new(bond_embed)));
                     }
                 }
-                // unary bindings now possible due to free'd sites
+                // unary combinatorics
                 let mut uni_combinatorics_gained: BTreeSet<Rc<RefCell<BondEmbed>>> = BTreeSet::new();
-                let mut heads_in_tail: HashSet<&NodeIndex> = tail_species.ports.map.get(&some_uni_bond_type.pair_1).unwrap().iter().clone().collect();
-                let mut tails_in_head: HashSet<&NodeIndex> = head_species.ports.map.get(&some_uni_bond_type.pair_2).unwrap().iter().clone().collect();
                 if bond_type.pair_1 == some_uni_bond_type.pair_1 {
                     tails_in_head.remove(&head_index);
                     for tail in tails_in_head {
-                        let bond_embed = BondEmbed{a_index: head_index, b_index: *tail, bond_type: some_uni_bond_type, z: None};
+                        let bond_embed = BondEmbed{a_index: head_index, b_index: tail, bond_type: some_uni_bond_type, z: None};
                         assert!(uni_combinatorics_gained.insert(Rc::new(RefCell::new(bond_embed))), "Embed {} already cached into the unary-gained temp. tracker!", bond_embed);
                     }
                 }
                 if bond_type.pair_2 == some_uni_bond_type.pair_2 {
                     heads_in_tail.remove(&tail_index);
                     for head in heads_in_tail {
-                        let bond_embed = BondEmbed{a_index: *head, b_index: tail_index, bond_type: some_uni_bond_type, z: None};
+                        let bond_embed = BondEmbed{a_index: head, b_index: tail_index, bond_type: some_uni_bond_type, z: None};
                         assert!(uni_combinatorics_gained.insert(Rc::new(RefCell::new(bond_embed))), "Embed {} already cached into the unary-gained temp. tracker!", bond_embed);
                     }
                 }
@@ -1362,6 +1378,13 @@ pub mod reaction_mixture {
         pub fn print_binary_free_transformation_posibilities(&self) {
             let str_vec: Vec<String> = self.interactions.iter().filter(|n| n.0.arity == InteractionArity::Binary && n.0.direction == InteractionDirection::Free).map(|i| format!("{}", i.1)).collect();
             println!("{}", str_vec.join("\n\n"))
+        }
+
+        /**
+         * Return number of simulated events so far.
+        */
+        pub fn event_number(&self) -> usize {
+            self.simulated_events
         }
     }
 }
