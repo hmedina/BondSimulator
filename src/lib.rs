@@ -344,7 +344,7 @@ mod collectors {
     /**
      * Annotation for a specific species in the mixture.
     */
-    #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+    #[derive(Debug, PartialEq, Eq)]
     pub struct MixtureSpecies <'a> {
         pub agent_set: BTreeSet<Rc<RefCell<Agent<'a>>>>,
         pub edges: BTreeSet<Rc<RefCell<BondEmbed<'a>>>>,
@@ -354,6 +354,28 @@ mod collectors {
     impl <'a> fmt::Display for MixtureSpecies <'a> {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             write!(f, "{}", self.agent_set.iter().map(|a| format!("{}", a.borrow())).join(", "))
+        }
+    }
+
+    // Manually derived to use agent_set length as most significant sorting attribute;
+    // idem for PartialOrd. This allows snapshots to print sorted species by size. Since the
+    // VecDeque will accumulate the biggest species on one end, fetching it will be efficient.
+    // Sorting a close-to-sorted VecDeque will also be efficient.
+    impl <'a> Ord for MixtureSpecies <'a> {
+        fn cmp(&self, other: &Self) -> Ordering {
+            if self.agent_set.len() == other.agent_set.len() {
+                if self.agent_set == other.agent_set {
+                    if self.edges == other.edges {
+                        self.ports.cmp(&other.ports)
+                    } else {self.edges.cmp(&other.edges) }
+                } else { self.agent_set.cmp(&other.agent_set) }
+            } else { self.agent_set.len().cmp(&other.agent_set.len()) }
+        }
+    }
+
+    impl <'a> PartialOrd for MixtureSpecies <'a> {
+        fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+            Some(self.cmp(other))
         }
     }
 
@@ -512,35 +534,6 @@ mod collectors {
     }
     
     impl <'a> InteractingTracker <'a> {
-        /**
-         * Update set with the elements from the other.
-        */
-        pub fn update_from(&mut self, other: &mut Self, species_annots: &BTreeMap<NodeIndex, Rc<RefCell<MixtureSpecies<'a>>>> ) {
-            self.set.append(&mut other.set);
-            self.update_activity(species_annots)
-        }
-
-        /**
-         * Partition the site-specific BTreeSets using a set of NodeIndexes, the "ejected" nodes.
-         * A bond where both agents belong to the ejected set, gets ejected and returned
-         * in a new object. Bonds where both agents do not belong to agents in the
-         * ejected set are retained. If one agent is ejected but another retained, this function
-         * panics, as it should not be breaking cycles as a side-effect.
-        */
-        pub fn eject_where(&mut self, ejected_nodes: &BTreeSet<NodeIndex>, species_annots: &BTreeMap<NodeIndex, Rc<RefCell<MixtureSpecies<'a>>>>) -> Self {
-            let sink: BTreeSet<Rc<RefCell<BondEmbed>>> = self.set.drain_filter( |b| ejected_nodes.contains(&b.borrow().a_index) && ejected_nodes.contains(&b.borrow().b_index)).collect();
-            self.update_activity(species_annots);
-            let mut ejected_pairs = InteractingTracker{
-                activity_calculated: 0.0,
-                activity_parameters: MassActionParameters{
-                    rate: self.activity_parameters.rate, 
-                    bias_m: self.activity_parameters.bias_m, 
-                    bias_a: self.activity_parameters.bias_a},
-                set: sink
-            };
-            ejected_pairs.update_activity(species_annots);
-            ejected_pairs
-        }
 
         /**
          * Constructor used when starting from a monomeric initial state. For interactions of 
@@ -722,10 +715,10 @@ pub mod reaction_mixture {
             self.advance_simulation_metrics();
             let time_pst: f64 = self.simulated_time();
             if let Some(period) = time_p {
-                if (time_pre / period) as i32 != (time_pst / period) as i32 {
-                    let mut alarm_mix: Mixture = self.clone();
-                    alarm_mix.simulated_time = ((time_pst / period) as i32) as f64;    // truncation
-                    alarm_mix.snapshot_to_file(dir);
+                let cycle_pre = time_pre.div_euclid(period);
+                let cycle_pst = time_pst.div_euclid(period);
+                if cycle_pre != cycle_pst {
+                    self.snapshot_to_file(dir, Some(cycle_pst * period), Some(self.simulated_events - 1))
                 }
             };
             // perform event
@@ -743,7 +736,7 @@ pub mod reaction_mixture {
             }
             // check if event period is satisfied; if so dump snapshot
             if event_p.is_some() && (self.event_number() % event_p.unwrap() == 0) {
-                self.snapshot_to_file(dir)
+                self.snapshot_to_file(dir, None, None)
             }
         }
 
@@ -771,23 +764,33 @@ pub mod reaction_mixture {
          * Yield a snapshot representation that can be printed or compared against others in a
          * kappa-aware way.
         */
-        pub fn to_kappa(&self) -> String {
+        pub fn to_kappa(&self, time_override: Option<f64>, event_override: Option<usize>) -> String {
             let mut mixture_vec: Vec<String> = Vec::with_capacity(self.species_set.len() + 3);
-            mixture_vec.push(format!("// Snapshot [Event:{}]\n// \"uuid\" : \"{}\"", self.simulated_events, self.uuid));
+            let event_to_print: usize = match event_override {
+                Some(e) => e,
+                None => self.simulated_events
+            };
+            mixture_vec.push(format!("// Snapshot [Event:{}]\n// \"uuid\" : \"{}\"", event_to_print, self.uuid));
             mixture_vec.push(format!("// Mixture has {} protomers and {} bonds in {} species", self.universe_graph.node_count(), self.universe_graph.edge_count(), self.species_set.len()));
-            mixture_vec.push(format!("%def: \"T0\" \"{}\"\n", self.simulated_time));
+            let time_to_print: f64 = match time_override {
+                Some(t) => t,
+                None => self.simulated_time
+            };
+            mixture_vec.push(format!("%def: \"T0\" \"{}\"\n", time_to_print));
             let mut cloned_species = self.species_set.clone();
             cloned_species.make_contiguous().sort_by(|a, b| b.cmp(a));
             for this_species in cloned_species {
                 mixture_vec.push(format!("init: 1 /*{} agents*/ {}", this_species.borrow().agent_set.len(), this_species.borrow()));
             }
-            mixture_vec.join("\n")           
+            let mut ka_str: String = mixture_vec.join("\n");
+            ka_str.push('\n');
+            ka_str
         }
 
         /**
          * Save to file in kappa-snapshot format.
         */
-        pub fn snapshot_to_file(&self, dir: &str) {
+        pub fn snapshot_to_file(&self, dir: &str, time_override: Option<f64>, event_override: Option<usize>) {
             let file_name: String = format!("{}/snapshot_{}.ka", dir, self.event_number());
             let path = Path::new(&file_name[..]);
             let display = path.display();
@@ -795,7 +798,7 @@ pub mod reaction_mixture {
                 Err(why) => panic!("Could not create {}: {}", display, why),
                 Ok(file) => file
             };
-            if let Err(why) = file.write_all(self.to_kappa().as_bytes()) { panic!("Could not write to {}: {}", display, why) }
+            if let Err(why) = file.write_all(self.to_kappa(time_override, event_override).as_bytes()) { panic!("Could not write to {}: {}", display, why) }
         }
 
         /**
@@ -925,8 +928,7 @@ pub mod reaction_mixture {
             let mut temp_container: BTreeMap<BondType, BTreeSet<Rc<RefCell<BondEmbed>>>> = BTreeMap::new();
             for (i_type, i_data) in self.interactions.iter_mut() {
                 if i_type.arity == InteractionArity::Binary && i_type.direction == InteractionDirection::Free {
-                    let newly_cyclized_bonds: BTreeSet<Rc<RefCell<BondEmbed>>>;
-                    newly_cyclized_bonds = i_data.set.drain_filter(is_newly_cyclized_bond).collect();
+                    let newly_cyclized_bonds: BTreeSet<Rc<RefCell<BondEmbed>>> = i_data.set.drain_filter(is_newly_cyclized_bond).collect();
                     let target_type = BondType{arity: InteractionArity::Unary, ..*i_type};
                     for this_embed in &newly_cyclized_bonds {
                         this_embed.borrow_mut().bond_type = target_type;
