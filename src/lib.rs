@@ -632,6 +632,13 @@ mod collectors {
             // and so the mixture transformation methods get a reference of their own
             chosen_embed
         }
+
+        /**
+         * Change the interaction base rate to a new value.
+        */
+        pub fn update_base_rate(&mut self, new_value: f64) {
+            self.activity_parameters.rate = new_value
+        }
     }
 
     impl <'a> fmt::Display for InteractingTracker <'a> {
@@ -1440,6 +1447,16 @@ pub mod reaction_mixture {
         */
         pub fn simulated_time(&self) -> f64 {
             self.simulated_time
+        }
+
+        /**
+         * Update the base rate of an interaction.
+        */
+        pub fn change_rate_of_interaction_to(&mut self, interaction: BondType<'a>, new_value: f64) {
+            match self.interactions.get_mut(&interaction) {
+                Some(container) => container.update_base_rate(new_value),
+                None => panic!("Error! Requested interaction {} not found in known interactions {}", interaction, self.interactions.keys().map(|k| k.to_string()).collect::<Vec<String>>().join("\n"))
+            }
         }
     }
 }
