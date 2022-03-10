@@ -362,7 +362,7 @@ mod collectors {
      * Map of HashSets, one per site type. The HashSets hold NodeIndexes, from the UniverseGraph.
      * The key of the map is the site name.
      */
-    #[derive(Debug, PartialEq, Eq)]
+    #[derive(Clone, Debug, PartialEq, Eq)]
     pub struct OpenPorts <'a> {
         pub map: BTreeMap<AgentSite<'a>, HashSet<NodeIndex>>
     }
@@ -456,7 +456,7 @@ mod collectors {
      * Convenience structure for calculating the activity of interactions, while keeping the bias
      * metrics & calculation separate.
     */
-    #[derive(Debug, PartialEq, PartialOrd)]
+    #[derive(Clone, Debug, PartialEq, PartialOrd)]
     pub struct MassActionParameters {
         /// The rate constant of the interaction
         rate: f64,
@@ -499,7 +499,7 @@ mod collectors {
      * Collects the interacting pairs, either bound already, or eligible for a future binding
      * event.
      */
-    #[derive(Debug, PartialEq, PartialOrd)]
+    #[derive(Clone, Debug, PartialEq, PartialOrd)]
     pub struct InteractingTracker <'a> {
         /// The set of interacting pairs.
         pub set: BTreeSet<Rc<RefCell<BondEmbed<'a>>>>,
@@ -659,6 +659,9 @@ pub mod reaction_mixture {
     use crate::collectors::{OpenPorts, MixtureSpecies, InteractingTracker};
     use std::cell::{RefCell, RefMut, Ref};
     use std::collections::{VecDeque, BTreeMap, BTreeSet, HashSet};
+    use std::fs::File;
+    use std::io::prelude::*;
+    use std::path::Path;
     use std::rc::Rc;
     use petgraph::{graph::Graph, algo::astar::astar, prelude::*, visit::Dfs};
     use rand::{distributions::WeightedIndex, prelude::*};
@@ -666,7 +669,7 @@ pub mod reaction_mixture {
 
 
 
-
+    #[derive(Clone)]
     pub struct Mixture <'a> {
         /// The graph that tracks connectivity; used for cycle detection & species partitioning.
         universe_graph: Graph<Rc<RefCell<Agent<'a>>>, bool, Undirected>,
@@ -693,11 +696,6 @@ pub mod reaction_mixture {
 
         /// Cache for the random number generator.
         simulator_rng: ThreadRng,
-
-        // Used to store the persistent owner of the strings for agent & site names, which are
-        // merely referenced in the other structures.
-        //raw_interaction_data: AllInteractionData,
-        //raw_protomer_abundances: ProtomerResources
     }
     
     impl <'a> Mixture <'a> {
@@ -718,20 +716,54 @@ pub mod reaction_mixture {
         /**
          * Based on the activities of the interactions, choose one to realize.
         */
-        pub fn choose_and_apply_next_rule(&mut self) {
-            // simulation metrics pre-event, for an eventual time tracker...
+        pub fn choose_and_apply_next_rule(&mut self, time_p: Option<f64>, event_p: Option<usize>, dir: &str) {
+            // if next event would be past the observation period, dump snapshot
+            let time_pre: f64 = self.simulated_time();
             self.advance_simulation_metrics();
+            let time_pst: f64 = self.simulated_time();
+            if let Some(period) = time_p {
+                if (time_pre / period) as i32 != (time_pst / period) as i32 {
+                    let mut alarm_mix: Mixture = self.clone();
+                    alarm_mix.simulated_time = ((time_pst / period) as i32) as f64;    // truncation
+                    alarm_mix.snapshot_to_file(dir);
+                }
+            };
+            // perform event
             let dist = WeightedIndex::new(self.interactions.iter().map(|i| i.1.activity_calculated)).unwrap();
             let chosen_index: usize = dist.sample(&mut self.simulator_rng);
             let chosen_bond_type: BondType = *self.interactions.iter().nth(chosen_index).unwrap().0;
             let i = self.interactions.get_mut(&chosen_bond_type).unwrap();
             let bond: Rc<RefCell<BondEmbed>> = i.pick_targets(&mut self.simulator_rng, &self.species_annots);
-            println!("Event: {:>5},\tchosen: {}", self.simulated_events, bond.borrow());
+            println!("Event: {:>5},\tTime: {:.5},\tchosen: {}", self.simulated_events, self.simulated_time, bond.borrow());
             match (chosen_bond_type.arity, chosen_bond_type.direction) {
                 (InteractionArity::Unary, InteractionDirection::Bind) => self.unary_bind(bond),
                 (InteractionArity::Unary, InteractionDirection::Free) => self.unary_free(bond),
                 (InteractionArity::Binary, InteractionDirection::Bind) => self.binary_bind(bond),
                 (InteractionArity::Binary, InteractionDirection::Free) => self.binary_free(bond)
+            }
+            // check if event period is satisfied; if so dump snapshot
+            if event_p.is_some() && (self.event_number() % event_p.unwrap() == 0) {
+                self.snapshot_to_file(dir)
+            }
+        }
+
+        /**
+         * Simulate a given amount of events, optionally dumping snapshots with some event
+         * periodicity.
+        */
+        pub fn simulate_up_to_event(&mut self, max_event: usize, snap_p: Option<usize>, dir: &str) {
+            while self.event_number() <= max_event {
+                self.choose_and_apply_next_rule(None, snap_p, dir);
+            }
+        }
+
+        /**
+         * Simulate a given amount of events, optionally dumping snapshots with some event
+         * periodicity.
+        */
+        pub fn simulate_up_to_time(&mut self, max_time: f64, snap_p: Option<f64>, dir: &str) {
+            while self.simulated_time() <= max_time {
+                self.choose_and_apply_next_rule(snap_p, None, dir);
             }
         }
 
@@ -750,6 +782,20 @@ pub mod reaction_mixture {
                 mixture_vec.push(format!("init: 1 /*{} agents*/ {}", this_species.borrow().agent_set.len(), this_species.borrow()));
             }
             mixture_vec.join("\n")           
+        }
+
+        /**
+         * Save to file in kappa-snapshot format.
+        */
+        pub fn snapshot_to_file(&self, dir: &str) {
+            let file_name: String = format!("{}/snapshot_{}.ka", dir, self.event_number());
+            let path = Path::new(&file_name[..]);
+            let display = path.display();
+            let mut file = match File::create(&path) {
+                Err(why) => panic!("Could not create {}: {}", display, why),
+                Ok(file) => file
+            };
+            if let Err(why) = file.write_all(self.to_kappa().as_bytes()) { panic!("Could not write to {}: {}", display, why) }
         }
 
         /**
@@ -1385,6 +1431,13 @@ pub mod reaction_mixture {
         */
         pub fn event_number(&self) -> usize {
             self.simulated_events
+        }
+
+        /**
+         * Return amount of simulated time so far.
+        */
+        pub fn simulated_time(&self) -> f64 {
+            self.simulated_time
         }
     }
 }
