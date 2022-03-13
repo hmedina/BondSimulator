@@ -899,9 +899,9 @@ pub mod reaction_mixture {
                 let binary_binding_types: Vec<BondType> = self.interactions.keys().filter(|b| b.arity == InteractionArity::Binary && b.direction == InteractionDirection::Bind).cloned().collect();
                 for some_bin_bond_type in binary_binding_types {
                     let some_uni_bond_type: BondType = BondType{arity: InteractionArity::Unary, ..some_bin_bond_type};
-                    let bi_combinatorics_lost: BTreeSet<Rc<RefCell<BondEmbed>>>;
-                    let un_combinatorics_lost: BTreeSet<Rc<RefCell<BondEmbed>>>;
-                    (bi_combinatorics_lost, un_combinatorics_lost) = if some_bin_bond_type.pair_1 == some_bin_bond_type.pair_2 {
+                    let _bi_combinatorics_lost: BTreeSet<Rc<RefCell<BondEmbed>>>;
+                    let _un_combinatorics_lost: BTreeSet<Rc<RefCell<BondEmbed>>>;
+                    (_bi_combinatorics_lost, _un_combinatorics_lost) = if some_bin_bond_type.pair_1 == some_bin_bond_type.pair_2 {
                         (
                             self.interactions.get_mut(&some_bin_bond_type).unwrap().set.drain_filter(|b| (b.borrow().a_index == head_index && b.borrow().bond_type.pair_1 == target_bond.borrow().bond_type.pair_1) || (b.borrow().b_index == tail_index && b.borrow().bond_type.pair_2 == target_bond.borrow().bond_type.pair_2) || (b.borrow().a_index == tail_index && b.borrow().bond_type.pair_1 == target_bond.borrow().bond_type.pair_2) || (b.borrow().b_index == head_index && b.borrow().bond_type.pair_2 == target_bond.borrow().bond_type.pair_1)).collect(),
                             self.interactions.get_mut(&some_uni_bond_type).unwrap().set.drain_filter(|b| (b.borrow().a_index == head_index && b.borrow().bond_type.pair_1 == target_bond.borrow().bond_type.pair_1) || (b.borrow().b_index == tail_index && b.borrow().bond_type.pair_2 == target_bond.borrow().bond_type.pair_2) || (b.borrow().a_index == tail_index && b.borrow().bond_type.pair_1 == target_bond.borrow().bond_type.pair_2) || (b.borrow().b_index == head_index && b.borrow().bond_type.pair_2 == target_bond.borrow().bond_type.pair_1)).collect()
@@ -989,9 +989,9 @@ pub mod reaction_mixture {
                     }
                     self.interactions.get_mut(&some_uni_bond_type).unwrap().set.append(&mut transformed_embeds);
                     // bindings no longer possible due to occupied sites
-                    let bi_combinatorics_lost: BTreeSet<Rc<RefCell<BondEmbed>>>;
-                    let un_combinatorics_lost: BTreeSet<Rc<RefCell<BondEmbed>>>;
-                    (bi_combinatorics_lost, un_combinatorics_lost) = if some_bin_bond_type.pair_1 == some_bin_bond_type.pair_2 {
+                    let _bi_combinatorics_lost: BTreeSet<Rc<RefCell<BondEmbed>>>;
+                    let _un_combinatorics_lost: BTreeSet<Rc<RefCell<BondEmbed>>>;
+                    (_bi_combinatorics_lost, _un_combinatorics_lost) = if some_bin_bond_type.pair_1 == some_bin_bond_type.pair_2 {
                         (
                             self.interactions.get_mut(&some_bin_bond_type).unwrap().set.drain_filter(|b| (b.borrow().a_index == head_index && b.borrow().bond_type.pair_1 == target_bond.borrow().bond_type.pair_1) || (b.borrow().b_index == tail_index && b.borrow().bond_type.pair_2 == target_bond.borrow().bond_type.pair_2) || (b.borrow().a_index == tail_index && b.borrow().bond_type.pair_1 == target_bond.borrow().bond_type.pair_2) || (b.borrow().b_index == head_index && b.borrow().bond_type.pair_2 == target_bond.borrow().bond_type.pair_1)).collect(),
                             self.interactions.get_mut(&some_uni_bond_type).unwrap().set.drain_filter(|b| (b.borrow().a_index == head_index && b.borrow().bond_type.pair_1 == target_bond.borrow().bond_type.pair_1) || (b.borrow().b_index == tail_index && b.borrow().bond_type.pair_2 == target_bond.borrow().bond_type.pair_2) || (b.borrow().a_index == tail_index && b.borrow().bond_type.pair_1 == target_bond.borrow().bond_type.pair_2) || (b.borrow().b_index == head_index && b.borrow().bond_type.pair_2 == target_bond.borrow().bond_type.pair_1)).collect()
@@ -1299,11 +1299,11 @@ pub mod reaction_mixture {
                     }
                 }
             }
-            let (ejected_agents, ejected_indexes, retained_mark, retained_agents, retained_indexes) =  // Iterate over small & lookup over big
+            let (ejected_agents, ejected_indexes, retained_mark, retained_agents) =  // Iterate over small & lookup over big
                 if head_graph_agents.len() >= tail_graph_agents.len()
-                    {(head_graph_agents, head_graph_indexes, tail_index, tail_graph_agents, tail_graph_indexes)}
+                    {(head_graph_agents, head_graph_indexes, tail_index, tail_graph_agents)}
                 else 
-                    {(tail_graph_agents, tail_graph_indexes, head_index, head_graph_agents, head_graph_indexes)};
+                    {(tail_graph_agents, tail_graph_indexes, head_index, head_graph_agents)};
             // create new species cache, in-place modify old species cache
             let ejected_ports: OpenPorts = self.species_annots.get(&retained_mark).unwrap().borrow_mut().ports.eject_where(&ejected_indexes);
             let ejected_edges: BTreeSet<Rc<RefCell<BondEmbed>>> = self.species_annots.get(&retained_mark).unwrap().borrow_mut().edges.drain_filter(|b| ejected_indexes.contains(&b.borrow().a_index)).collect();

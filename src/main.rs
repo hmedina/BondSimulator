@@ -1,12 +1,9 @@
 use axin_apc_simulator::building_blocks::{AllInteractionData, ProtomerResources};
-use axin_apc_simulator::primitives::*;
 use axin_apc_simulator::reaction_mixture::Mixture;
-use std::cell::RefCell;
 use std::fs;
 use std::io::ErrorKind;
-use std::rc::Rc;
+use std::time::SystemTime;
 use clap::Parser;
-use petgraph::prelude::*;
 
 
 #[derive(Parser, Debug)]
@@ -55,8 +52,12 @@ fn main() {
 
     match (args.requested_events, args.requested_time) {
         (None, Some(m_time)) => {
+            let init_time = SystemTime::now();
+            println!("Starting initialization...");
             let mut my_mix = Mixture::new_monomeric_from(&raw_abundances, &raw_interactions);
-            my_mix.simulate_up_to_time(m_time, args.snap_time_p, &args.snapshot_dir)
+            println!("Initialization complete! Duration was {} seconds; simulation starting...", init_time.elapsed().unwrap().as_secs());
+            my_mix.simulate_up_to_time(m_time, args.snap_time_p, &args.snapshot_dir);
+            println!("Simulation done! Duration was {} seconds.", init_time.elapsed().unwrap().as_secs());
         },
         (Some(m_event), None) => {
             let mut my_mix = Mixture::new_monomeric_from(&raw_abundances, &raw_interactions);
