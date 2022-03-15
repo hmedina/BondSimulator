@@ -56,7 +56,7 @@ fn main() {
             println!("Starting initialization...");
             let mut my_mix = Mixture::new_monomeric_from(&raw_abundances, &raw_interactions);
             println!("Initialization complete! Duration was {} seconds; simulation starting...", init_time.elapsed().unwrap().as_secs());
-            my_mix.simulate_up_to_time(m_time, args.snap_time_p, &args.snapshot_dir);
+            my_mix.simulate_up_to_time(m_time, args.snap_time_p, Some(&args.snapshot_dir));
             println!("Simulation complete! Duration was {} seconds.", init_time.elapsed().unwrap().as_secs());
         },
         (Some(m_event), None) => {
@@ -64,7 +64,7 @@ fn main() {
             println!("Starting initialization...");
             let mut my_mix = Mixture::new_monomeric_from(&raw_abundances, &raw_interactions);
             println!("Initialization complete! Duration was {} seconds; simulation starting...", init_time.elapsed().unwrap().as_secs());
-            my_mix.simulate_up_to_event(m_event, args.snap_event_p, &args.snapshot_dir);
+            my_mix.simulate_up_to_event(m_event, args.snap_event_p, Some(&args.snapshot_dir));
             println!("Simulation complete! Duration was {} seconds.", init_time.elapsed().unwrap().as_secs());
         },
         (None, None) => {println!("Error; supply a run-length of either time or events.")},

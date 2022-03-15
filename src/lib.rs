@@ -503,7 +503,7 @@ mod collectors {
          * With both biases omitted:
          * `α = rate * mass * 1 + 0`
         */
-        pub fn calculate_activity(&self, mass: usize, a_size: usize, b_size: usize) -> f64 {
+        pub fn calculate_activity(&self, a_size: usize, b_size: usize) -> f64 {
             let m: f64 = match self.bias_m {
                 Some(f) => f * a_size as f64 * b_size as f64,
                 None => 1.0
@@ -512,7 +512,8 @@ mod collectors {
                 Some(f) => f * a_size as f64 * b_size as f64,
                 None => 0.0
             };
-            mass as f64 * self.rate * m + a
+            let act: f64 = self.rate * m + a;
+            act
         }
     }
 
@@ -607,7 +608,7 @@ mod collectors {
                 let borrowed_pair = pair.borrow();
                 let index_a: NodeIndex = borrowed_pair.a_index;
                 let index_b: NodeIndex = borrowed_pair.b_index;
-                self.activity_parameters.calculate_activity(self.set.len(), species_annots.get(&index_a).unwrap().borrow().agent_set.len(), species_annots.get(&index_b).unwrap().borrow().agent_set.len())
+                self.activity_parameters.calculate_activity(species_annots.get(&index_a).unwrap().borrow().agent_set.len(), species_annots.get(&index_b).unwrap().borrow().agent_set.len())
             };
             let embed_weights: Vec<f64> = self.set.iter().map(helper_closure).collect::<Vec<f64>>();
             embed_weights
@@ -664,7 +665,7 @@ pub mod reaction_mixture {
     use std::path::Path;
     use std::rc::Rc;
     use petgraph::{graph::Graph, algo::astar::astar, prelude::*, visit::Dfs};
-    use rand::{distributions::WeightedIndex, prelude::*};
+    use rand::{distributions::{WeightedIndex, weighted::WeightedError}, prelude::*};
     use uuid::Uuid;
 
 
@@ -705,45 +706,55 @@ pub mod reaction_mixture {
         */
         fn advance_simulation_metrics(&mut self) {
             self.simulated_events += 1;
-            let mut tau: f64 = 0.0;
+            let mut sys_act: f64 = 0.0;
             for i_data in self.interactions.values() {
-                tau += i_data.activity_calculated;
+                sys_act += i_data.activity_calculated;
             }
             let rdy: f64 = (1.0 / self.simulator_rng.gen::<f64>()).ln();
-            self.simulated_time += tau * rdy;
+            self.simulated_time += 1.0 / sys_act * rdy;
         }
 
         /**
          * Based on the activities of the interactions, choose one to realize.
         */
-        pub fn choose_and_apply_next_rule(&mut self, time_p: Option<f64>, event_p: Option<usize>, dir: &str) {
+        pub fn choose_and_apply_next_rule(&mut self, time_p: Option<f64>, event_p: Option<usize>, dir: Option<&str>) {
             // if next event would be past the observation period, dump snapshot
             let time_pre: f64 = self.simulated_time();
             self.advance_simulation_metrics();
             let time_pst: f64 = self.simulated_time();
-            if let Some(period) = time_p {
+            if let (Some(period), Some(out_dir)) = (time_p, dir) {
                 let cycle_pre = time_pre.div_euclid(period);
                 let cycle_pst = time_pst.div_euclid(period);
                 if cycle_pre != cycle_pst {
-                    self.snapshot_to_file(dir, Some(cycle_pst * period), Some(self.simulated_events - 1))
+                    self.snapshot_to_file(out_dir, Some(cycle_pst * period), Some(self.simulated_events - 1))
                 }
             };
             // perform event
-            let dist = WeightedIndex::new(self.interactions.iter().map(|i| i.1.activity_calculated)).unwrap();
-            let chosen_index: usize = dist.sample(&mut self.simulator_rng);
-            let chosen_bond_type: BondType = *self.interactions.iter().nth(chosen_index).unwrap().0;
-            let i = self.interactions.get_mut(&chosen_bond_type).unwrap();
-            let bond: Rc<RefCell<BondEmbed>> = i.pick_targets(&mut self.simulator_rng, &self.species_annots);
-            println!("Event: {:>5},\tTime: {:.5},\tchosen: {}", self.simulated_events, self.simulated_time, bond.borrow());
-            match (chosen_bond_type.arity, chosen_bond_type.direction) {
-                (InteractionArity::Unary, InteractionDirection::Bind) => self.unary_bind(bond),
-                (InteractionArity::Unary, InteractionDirection::Free) => self.unary_free(bond),
-                (InteractionArity::Binary, InteractionDirection::Bind) => self.binary_bind(bond),
-                (InteractionArity::Binary, InteractionDirection::Free) => self.binary_free(bond)
-            }
-            // check if event period is satisfied; if so dump snapshot
-            if event_p.is_some() && (self.event_number() % event_p.unwrap() == 0) {
-                self.snapshot_to_file(dir, None, None)
+            let weight_res = WeightedIndex::new(self.interactions.iter().map(|i| i.1.activity_calculated));
+            match weight_res {
+                Ok(dist) => {
+                    let chosen_index: usize = dist.sample(&mut self.simulator_rng);
+                    let chosen_bond_type: BondType = *self.interactions.iter().nth(chosen_index).unwrap().0;
+                    let i = self.interactions.get_mut(&chosen_bond_type).unwrap();
+                    let bond: Rc<RefCell<BondEmbed>> = i.pick_targets(&mut self.simulator_rng, &self.species_annots);
+                    println!("Event: {:>5},\tTime: {:.5},\tchosen: {}", self.simulated_events, self.simulated_time, bond.borrow());
+                    match (chosen_bond_type.arity, chosen_bond_type.direction) {
+                        (InteractionArity::Unary, InteractionDirection::Bind) => self.unary_bind(bond),
+                        (InteractionArity::Unary, InteractionDirection::Free) => self.unary_free(bond),
+                        (InteractionArity::Binary, InteractionDirection::Bind) => self.binary_bind(bond),
+                        (InteractionArity::Binary, InteractionDirection::Free) => self.binary_free(bond)
+                    }
+                    // check if event period is satisfied; if so dump snapshot
+                    if event_p.is_some() && dir.is_some() && (self.event_number() % event_p.unwrap() == 0) {
+                        self.snapshot_to_file(dir.unwrap(), None, None)
+                    }
+                },
+                Err(err_kind) => match err_kind {
+                    WeightedError::NoItem => panic!("Error, interaction set is empty!"),
+                    WeightedError::AllWeightsZero => {println!("System activity is at zero; terminating."); return()},
+                    WeightedError::InvalidWeight => panic!("Error, invalid weight found in interaction set!"),
+                    WeightedError::TooMany => panic!("Error, too many interactions!")
+                }
             }
         }
 
@@ -751,7 +762,7 @@ pub mod reaction_mixture {
          * Simulate a given amount of events, optionally dumping snapshots with some event
          * periodicity.
         */
-        pub fn simulate_up_to_event(&mut self, max_event: usize, snap_p: Option<usize>, dir: &str) {
+        pub fn simulate_up_to_event(&mut self, max_event: usize, snap_p: Option<usize>, dir: Option<&str>) {
             while self.event_number() <= max_event {
                 self.choose_and_apply_next_rule(None, snap_p, dir);
             }
@@ -761,7 +772,7 @@ pub mod reaction_mixture {
          * Simulate a given amount of events, optionally dumping snapshots with some event
          * periodicity.
         */
-        pub fn simulate_up_to_time(&mut self, max_time: f64, snap_p: Option<f64>, dir: &str) {
+        pub fn simulate_up_to_time(&mut self, max_time: f64, snap_p: Option<f64>, dir: Option<&str>) {
             while self.simulated_time() <= max_time {
                 self.choose_and_apply_next_rule(snap_p, None, dir);
             }
@@ -1389,10 +1400,12 @@ pub mod reaction_mixture {
         */
         pub fn print_activities(&self) {
             let mut str_vec: Vec<String> = Vec::new();
+            let mut sys_act: f64 = 0.0;
             for (i_name, i_data) in &self.interactions {
+                sys_act += i_data.activity_calculated;
                 str_vec.push(format!("{:.4e}\t\t{}", i_data.activity_calculated, i_name))
             }
-            println!("Rule activities:\n{}", str_vec.join("\n"))
+            println!("System activity {};\trule activities:\n{}", sys_act, str_vec.join("\n"))
         }
 
         /**
