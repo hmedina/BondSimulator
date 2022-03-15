@@ -1,0 +1,139 @@
+{ "interactions":
+    [
+        {
+            "name": "head to tail polymerization",
+            "bind_unary": {
+                "base": 1.0e-2,
+                "multiplicative": null,
+                "additive": null
+            },
+            "bind_binary": {
+                "base": 1.0e-4,
+                "multiplicative": null,
+                "additive": null
+            },
+            "free_unary": {
+                "base": 1.0e-2,
+                "multiplicative": null,
+                "additive": null
+            },
+            "free_binary": {
+                "base": 1.0e-2,
+                "multiplicative": null,
+                "additive": null
+            },
+            "agent_a": "Axin",
+            "agent_b": "Axin",
+            "site_a": "head",
+            "site_b": "tail"
+        },
+        {
+            "name": "RGS-SAMP1",
+            "bind_unary": {
+                "base": 1.0e-2,
+                "multiplicative": null,
+                "additive": null
+            },
+            "bind_binary": {
+                "base": 1.0e-4,
+                "multiplicative": null,
+                "additive": null
+            },
+            "free_unary": {
+                "base": 1.0e-2,
+                "multiplicative": null,
+                "additive": null
+            },
+            "free_binary": {
+                "base": 1.0e-2,
+                "multiplicative": null,
+                "additive": null
+            },
+            "agent_a": "APC",
+            "agent_b": "Axin",
+            "site_a": "SAMP1",
+            "site_b": "RGS"
+        },
+        {
+            "name": "RGS-SAMP2",
+            "bind_unary": {
+                "base": 1.0e-2,
+                "multiplicative": null,
+                "additive": null
+            },
+            "bind_binary": {
+                "base": 1.0e-4,
+                "multiplicative": null,
+                "additive": null
+            },
+            "free_unary": {
+                "base": 1.0e-2,
+                "multiplicative": null,
+                "additive": null
+            },
+            "free_binary": {
+                "base": 1.0e-2,
+                "multiplicative": null,
+                "additive": null
+            },
+            "agent_a": "APC",
+            "agent_b": "Axin",
+            "site_a": "SAMP2",
+            "site_b": "RGS"
+        },
+        {
+            "name": "RGS-SAMP3",
+            "bind_unary": {
+                "base": 1.0e-2,
+                "multiplicative": null,
+                "additive": null
+            },
+            "bind_binary": {
+                "base": 1.0e-4,
+                "multiplicative": null,
+                "additive": null
+            },
+            "free_unary": {
+                "base": 1.0e-2,
+                "multiplicative": null,
+                "additive": null
+            },
+            "free_binary": {
+                "base": 1.0e-2,
+                "multiplicative": null,
+                "additive": null
+            },
+            "agent_a": "APC",
+            "agent_b": "Axin",
+            "site_a": "SAMP3",
+            "site_b": "RGS"
+        },
+        {
+            "name": null,
+            "bind_unary": {
+                "base": 1.0e-2,
+                "multiplicative": null,
+                "additive": null
+            },
+            "bind_binary": {
+                "base": 1.0e-4,
+                "multiplicative": null,
+                "additive": null
+            },
+            "free_unary": {
+                "base": 1.0e-2,
+                "multiplicative": null,
+                "additive": null
+            },
+            "free_binary": {
+                "base": 1.0e-2,
+                "multiplicative": null,
+                "additive": null
+            },
+            "agent_a": "APC",
+            "agent_b": "APC",
+            "site_a": "Oligo",
+            "site_b": "Oligo"
+        }
+    ]
+}

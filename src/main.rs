@@ -1,67 +1,73 @@
+use axin_apc_simulator::building_blocks::{AllInteractionData, ProtomerResources};
+use axin_apc_simulator::reaction_mixture::Mixture;
+use std::fs;
+use std::io::ErrorKind;
+use std::time::SystemTime;
 use clap::Parser;
-use axin_apc_simulator::{rule_activities::RuleRates, reaction_mixture::Mixture};
 
 
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about=None)]
 struct Args {
-    /// Number of Axn-type protomers in the initial mix.
-    #[clap(short='x', long, default_value_t = 0)]
-    axn: usize,
+    /// Path to file with protomer abundances
+    #[clap(short='a', long, default_value = "./examples/APC_HUMAN--AXIN1_HUMAN--intestinal_crypt/Abundances_toy.json")]
+    abundances_path: String,
 
-    /// Number of APC-type protomers in the initial mix.
-    #[clap(short='p', long, default_value_t = 0)]
-    apc: usize,
+    /// Path to file with interaction data
+    #[clap(short='i', long, default_value = "./examples/APC_HUMAN--AXIN1_HUMAN--intestinal_crypt/Interactions.json")]
+    interactions_path: String,
 
-    /// Number of events to simulate.
-    #[clap(short, long, default_value_t = 10)]
-    events: usize,
+    /// Maximum number of events to simulate
+    #[clap(short='e', long)]
+    requested_events: Option<usize>,
 
-    /// Axn-Axn unary binding rate constant.
-    #[clap(long, default_value_t = 0.0)]
-    axn_axn_u_bind: f64,
+    /// Maximum time to simulate
+    #[clap(short='t', long)]
+    requested_time: Option<f64>,
 
-    /// Axn_Axn binary binding rate constant.
-    #[clap(long, default_value_t = 0.0)]
-    axn_axn_b_bind: f64,
+    /// Path to file where snapshots should be saved
+    #[clap(short='o', long, default_value = "./output")]
+    snapshot_dir: String,
 
-    /// Axn-Axn unary unbinding rate constant.
-    #[clap(long, default_value_t = 0.0)]
-    axn_axn_u_free: f64,
+    /// Snapshot-taking period, in time units
+    #[clap(long)]
+    snap_time_p: Option<f64>,
 
-    /// Axn_Axn binary unbinding rate constant.
-    #[clap(long, default_value_t = 0.0)]
-    axn_axn_b_free: f64
+    /// Snapshot-taking period, in event number
+    #[clap(long)]
+    snap_event_p: Option<usize>,
 }
 
 fn main() {
     let args = Args::parse();
-
-    let my_rates = RuleRates {
-        axn_axn_u_bind: args.axn_axn_u_bind,
-        axn_axn_b_bind: args.axn_axn_b_bind,
-        axn_axn_u_free: args.axn_axn_u_free,
-        axn_axn_b_free: args.axn_axn_b_free,
-        ap1_axn_u_bind: 0.0,
-        ap1_axn_b_bind: 0.0,
-        ap1_axn_u_free: 0.0,
-        ap1_axn_b_free: 0.0,
-        ap2_axn_u_bind: 0.0,
-        ap2_axn_b_bind: 0.0,
-        ap2_axn_u_free: 0.0,
-        ap2_axn_b_free: 0.0,
-        ap3_axn_u_bind: 0.0,
-        ap3_axn_b_bind: 0.0,
-        ap3_axn_u_free: 0.0,
-        ap3_axn_b_free: 0.0,
-        apc_apc_u_bind: 0.0,
-        apc_apc_b_bind: 0.0,
-        apc_apc_u_free: 0.0,
-        apc_apc_b_free: 0.0,
-    };
-    let mut my_mix = Mixture::new_from_monomers(args.axn, args.apc, my_rates);
-    for _ in 0..args.events {
-        my_mix.choose_and_apply_next_rule();
+    let raw_interactions: AllInteractionData = AllInteractionData::from_json(args.interactions_path).unwrap();
+    let raw_abundances: ProtomerResources = ProtomerResources::from_json(args.abundances_path).unwrap();
+    match fs::create_dir(&args.snapshot_dir) {
+        Err(why) => match why.kind() {
+            ErrorKind::AlreadyExists => {println!("Directory {} already exists; reusing it.", args.snapshot_dir)},
+            _ => println!("Could not create directory {}: {}", args.snapshot_dir, why)
+        }
+        Ok(_) => {}
     }
-    println!("{}", my_mix.to_kappa());
+
+    match (args.requested_events, args.requested_time) {
+        (None, Some(m_time)) => {
+            let init_time = SystemTime::now();
+            println!("Starting initialization...");
+            let mut my_mix = Mixture::new_monomeric_from(&raw_abundances, &raw_interactions);
+            println!("Initialization complete! Duration was {} seconds; simulation starting...", init_time.elapsed().unwrap().as_secs());
+            my_mix.simulate_up_to_time(m_time, args.snap_time_p, Some(&args.snapshot_dir));
+            println!("Simulation complete! Duration was {} seconds.", init_time.elapsed().unwrap().as_secs());
+        },
+        (Some(m_event), None) => {
+            let init_time = SystemTime::now();
+            println!("Starting initialization...");
+            let mut my_mix = Mixture::new_monomeric_from(&raw_abundances, &raw_interactions);
+            println!("Initialization complete! Duration was {} seconds; simulation starting...", init_time.elapsed().unwrap().as_secs());
+            my_mix.simulate_up_to_event(m_event, args.snap_event_p, Some(&args.snapshot_dir));
+            println!("Simulation complete! Duration was {} seconds.", init_time.elapsed().unwrap().as_secs());
+        },
+        (None, None) => {println!("Error; supply a run-length of either time or events.")},
+        (Some(_), Some(_)) => {panic!("Can't run in both time and event mode! Supply one or the other.")},
+    }
 }
