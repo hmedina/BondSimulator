@@ -619,15 +619,23 @@ mod collectors {
          * binding pair.
         */
         pub fn update_activity(&mut self, species_annots: &BTreeMap<NodeIndex, Rc<RefCell<MixtureSpecies<'a>>>>) {
-            self.activity_calculated = self.build_embed_weights(species_annots).iter().sum();
+            self.activity_calculated = match (self.activity_parameters.bias_a, self.activity_parameters.bias_m) {
+                (None, None) => self.set.len() as f64 * self.activity_parameters.rate,
+                (_, _) => self.build_embed_weights(species_annots).iter().sum()
+            };
         }
 
         /**
          * Using complex sizes in the weighting, pick a target embed.
         */
         pub fn pick_targets(&self, rng: &mut ThreadRng, species_annots: &BTreeMap<NodeIndex, Rc<RefCell<MixtureSpecies<'a>>>>) -> Rc<RefCell<BondEmbed<'a>>> {
-            let dist = WeightedIndex::new(self.build_embed_weights(species_annots)).unwrap();
-            let chosen_ix: usize = dist.sample(rng);
+            let chosen_ix: usize = match (self.activity_parameters.bias_a, self.activity_parameters.bias_m) {
+                (None, None) => rng.gen_range(0..=self.set.len()),
+                (_, _) => {
+                    let dist = WeightedIndex::new(self.build_embed_weights(species_annots)).unwrap();
+                    dist.sample(rng)
+                }
+            };
             let chosen_embed: Rc<RefCell<BondEmbed>> = Rc::clone(self.set.iter().nth(chosen_ix).unwrap());
             // To avoid mutating self, this returns a new reference to the Rc<RefCell<BondEmbed>>,
             // and so the mixture transformation methods get a reference of their own

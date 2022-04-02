@@ -67,7 +67,7 @@ fn main() {
             my_mix.simulate_up_to_event(m_event, args.snap_event_p, Some(&args.snapshot_dir));
             println!("Simulation complete! Duration was {} seconds.", init_time.elapsed().unwrap().as_secs());
         },
-        (None, None) => {println!("Error; supply a run-length of either time or events.")},
+        (None, None) => {println!("Error; supply a run-length of either time (-t) or events (-e).")},
         (Some(_), Some(_)) => {panic!("Can't run in both time and event mode! Supply one or the other.")},
     }
 }
